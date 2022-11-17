@@ -1,7 +1,9 @@
 # botpath-generator
 Generate a .qc/.smd model following player position data
 
-Usage (for linux):
+Web Interface: https://thedevelo.github.io/botpath-generator/
+
+CLI Usage:
 ```bash
-ruby main.rb console.log >botpath_ref.smd
+ruby -Ilib cli.rb console.log
 ```

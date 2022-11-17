@@ -1,0 +1,113 @@
+<html>
+  <head>
+    <script src="botpath.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-Zenh87qX5JnK2Jl0vWa8Ck2rdkQ2Bzep5IDxbcnCeuOxjzrPF/et3URy9Bv1WTRi" crossorigin="anonymous">
+    <title>Develo's Botpath Generator</title>
+  </head>
+  <body>
+    <h1>Develo's Botpath Model Generator</h1>
+    <p>
+      This tool lets you generate a .qc/.smd model for use in Source Engine games that follows a player's movement path.
+      To use this tool, select your movement data (on how to obtain it, see below), choose a name for your model, pick the size of the model, pick the color for the model, and click generate.
+      You can then save the generated .zip file and extract to obtain the generated model.
+      Compile the .qc and .smd with Crowbar/studiomdl, and place the contents of the materials folder in the materials folder for the game you are mapping for.
+      You should then be able to use your generated model as a prop_static in Hammer.
+    </p>
+    <hr/>
+    <div>
+      <label for="file-selector">Player Movement Data (console.log): </label>
+      <input type="file" id="file-selector" name="file-selector">
+    </div>
+    <div>
+      <label for="name">Botpath Model Path/Name: </label>
+      <input type="text" id="name" name="name" value="bp-gen/botpath-model">
+    </div>
+    <div>
+      <label for="size">Botpath Size (in units): </label>
+      <input type="number" id="size" name="size" value="16.0">
+    </div>
+    <div>
+      <label for="color">Botpath Color: </label>
+      <input type="color" id="color" name="color" value="#ffffff">
+    </div>
+    <input type="button" id="generate" value="Generate">
+    <hr/>
+    <h2>Generating the movement data</h2>
+    <p>
+      To utilize this tool, you must record the movement data from in-game. This process takes a few steps:
+      <br/>
+      1. Launch Momentum Mod/Counter Strike: Source/Counter Strike: Global Offensive/Team Fortress 2/etc with the launch argument "-condebug".
+      If you are playing on the playtest/key version of Momentum Mod, add "-mapping" as well.
+      <br/>
+      2. Bind a key to "getpos" in the console via "bind KEY getpos".
+      <br/>
+      3. Open the map you want to record movement for.
+      Get in position for where you want your botpath to start.
+      If you instead want to record a Momentum Mod replay, load the replay, pause, and go to the beginning.
+      <br/>
+      4. Using external software such as AutoHotKey, official software from your keyboard's manufacturer, xdotool for linux, etc, repeatedly press the key you bound to "getpos".
+      The more frequently you press the key, the smoother the botpath model will be, but the model will also be larger in file size/use more polys.
+      <br/>
+      5. Start playing the game. If you want to record a Momentum Mod replay, you can now unpause the replay.
+      <br/>
+      NOTE: If you mess up while recording, the only way to restart is to close the game, delete the console.log file, and relaunch. I do plan to support a reset button in the future.
+      <br/>
+      6. Once you are satisfied, stop the external software and close the game.
+      In your game installation's momentum/cstrike/etc folder, there should be a file called "console.log".
+      This is the file that contains the required movement data for this tool.
+      Move this file elsewhere, as the game may not overwrite the file but instead add onto it, resulting in an incorrect botpath model.
+      <br/>
+      <br/>
+      If you do not already have external software to repeatedly press a key, here is a suitable AutoHotkey script.
+      Press F6 to toggle pressing "l" on and on.
+      You can adjust the resolution of the script by changing 50 to a different value.
+      A higher value means a longer delay between presses, and thus a lower resolution but smaller file size.
+      <pre><code>
+#MaxThreadsPerHotkey 2
+
+F6::
+{
+    Toggle:=!Toggle
+    While, Toggle
+    {
+        Send l
+        Sleep, 50
+    }
+}
+Return        
+      </code></pre>
+      Save the script to an .ahk file and run with AutoHotkey. When you're finished feel free to close AutoHotkey.
+    </p>
+    <script>
+      const generateButton = document.getElementById('generate');
+      generateButton.addEventListener('click', (event) => {
+        const [file] = document.getElementById("file-selector").files;
+        const name = document.getElementById("name").value;
+        const size = document.getElementById("size").value;
+        const color = document.getElementById("color").value.substring(1);
+        const reader = new FileReader();
+
+        reader.addEventListener("load", () => {
+          var files = Opal.Kernel.$generate_zip(reader.result, name, size, color)
+          var zip = new JSZip();
+          zip.file("botpath_ref.smd", files[0]);
+          zip.file("botpath.qc", files[1]);
+          var mats = zip.folder("materials").folder("bp-gen");
+          mats.file("botpath.vtf", files[2], { base64: true });
+          mats.file("botpath-" + color + ".vmt", files[3])
+          zip.generateAsync({type:"blob"})
+          .then(function(content) {
+              saveAs(content, "botpath-model.zip");
+          });
+        }, false);
+        
+        if (file) {
+          reader.readAsText(file);
+        }
+      });
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-OERcA2EqjJCMA+/3y+gxIOqMEjwtxJY7qPCqsdltbNJuaOe923+mo//f6V8Qbsw3" crossorigin="anonymous"></script>
+  </body>
+</html>
