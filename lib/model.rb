@@ -1,7 +1,37 @@
-module Model
-  def self.generate_model(verts, name, size, vmt, material_path)
-    verts = prune_vertices(verts, 0.0)
+require 'matrix'
 
+require 'vector_ext'
+
+module Model
+  def self.generate_model(verts, name, radius, vmt, material_path, sides)
+    verts = prune_vertices(verts, 0)
+
+    # Generate vertex skeleton for model shape
+    norm_vec_diff = []
+    (0...(verts.length - 1)).each do |i|
+      norm_vec_diff[i] = (verts[i+1] - verts[i]).normalize
+    end
+
+    mitre_planes = [norm_vec_diff[0]]
+    (1...(verts.length - 1)).each do |i|
+      mitre_planes[i] = (norm_vec_diff[i] + norm_vec_diff[i-1]).normalize
+    end
+    mitre_planes[-1] = norm_vec_diff[-2]
+
+    skeleton = []
+    angle = 2.0 * Math::PI / sides
+    up_vector = Vector[0.0, 0.0, 1.0].project_plane(mitre_planes[0])
+    up_vector = Vector[1.0, 0.0, 0.0] if up_vector == Vector[0.0, 0.0, 0.0]
+    mitre_planes.each_with_index do |p, i|
+      up_vector = radius * up_vector.project_plane(p).normalize
+      face = [up_vector + verts[i]]
+      (1...sides).each do |n|
+        face << up_vector.rotate_around(p, angle * n) + verts[i]
+      end
+      skeleton << face
+    end
+
+    # Generate model files
     smd = <<~SMDTMP
     version 1
     nodes
@@ -14,26 +44,51 @@ module Model
     triangles
     SMDTMP
 
-    (0...(verts.length - 1)).each do |i|
-      smd += "#{vmt}.vmt\n"
-      smd += "0 #{verts[i][0]} #{verts[i][1]} #{verts[i][2]} 0.0 0.0 0.0 0.0 0.0\n"
-      smd += "0 #{verts[i][0]} #{verts[i][1]} #{verts[i][2] + size} 0.0 0.0 0.0 0.0 0.0\n"
-      smd += "0 #{verts[i+1][0]} #{verts[i+1][1]} #{verts[i+1][2]} 0.0 0.0 0.0 0.0 0.0\n"
+    # Add start cap
+    front_face = skeleton[0]
+    (1...(sides-1)).each do |i|
+      x = front_face[0]
+      y = front_face[i+1]
+      z = front_face[i]
 
       smd += "#{vmt}.vmt\n"
-      smd += "0 #{verts[i][0]} #{verts[i][1]} #{verts[i][2] + size} 0.0 0.0 0.0 0.0 0.0\n"
-      smd += "0 #{verts[i][0]} #{verts[i][1]} #{verts[i][2]} 0.0 0.0 0.0 0.0 0.0\n"
-      smd += "0 #{verts[i+1][0]} #{verts[i+1][1]} #{verts[i+1][2]} 0.0 0.0 0.0 0.0 0.0\n"
+      smd += "0 #{x[0]} #{x[1]} #{x[2]} 0.0 0.0 0.0 0.0 0.0\n"
+      smd += "0 #{y[0]} #{y[1]} #{y[2]} 0.0 0.0 0.0 0.0 0.0\n"
+      smd += "0 #{z[0]} #{z[1]} #{z[2]} 0.0 0.0 0.0 0.0 0.0\n"
+    end
+
+    (0...(skeleton.length - 1)).each do |i|
+      back_face = skeleton[i]
+      front_face = skeleton[i+1]
+      (0...sides).each do |n|
+        x = back_face[n]
+        y = back_face[(n + 1) % sides]
+        z = front_face[n]
+        w = front_face[(n + 1) % sides]
+
+        smd += "#{vmt}.vmt\n"
+        smd += "0 #{x[0]} #{x[1]} #{x[2]} 0.0 0.0 0.0 0.0 0.0\n"
+        smd += "0 #{y[0]} #{y[1]} #{y[2]} 0.0 0.0 0.0 0.0 0.0\n"
+        smd += "0 #{z[0]} #{z[1]} #{z[2]} 0.0 0.0 0.0 0.0 0.0\n"
+
+        smd += "#{vmt}.vmt\n"
+        smd += "0 #{w[0]} #{w[1]} #{w[2]} 0.0 0.0 0.0 0.0 0.0\n"
+        smd += "0 #{z[0]} #{z[1]} #{z[2]} 0.0 0.0 0.0 0.0 0.0\n"
+        smd += "0 #{y[0]} #{y[1]} #{y[2]} 0.0 0.0 0.0 0.0 0.0\n"
+      end
+    end
+
+    # Add end cap
+    back_face = skeleton[-1]
+    (1...(sides-1)).each do |i|
+      x = back_face[0]
+      y = back_face[i]
+      z = back_face[i+1]
 
       smd += "#{vmt}.vmt\n"
-      smd += "0 #{verts[i+1][0]} #{verts[i+1][1]} #{verts[i+1][2]} 0.0 0.0 0.0 0.0 0.0\n"
-      smd += "0 #{verts[i+1][0]} #{verts[i+1][1]} #{verts[i+1][2] + size} 0.0 0.0 0.0 0.0 0.0\n"
-      smd += "0 #{verts[i][0]} #{verts[i][1]} #{verts[i][2] + size} 0.0 0.0 0.0 0.0 0.0\n"
-
-      smd += "#{vmt}.vmt\n"
-      smd += "0 #{verts[i+1][0]} #{verts[i+1][1]} #{verts[i+1][2] + size} 0.0 0.0 0.0 0.0 0.0\n"
-      smd += "0 #{verts[i+1][0]} #{verts[i+1][1]} #{verts[i+1][2]} 0.0 0.0 0.0 0.0 0.0\n"
-      smd += "0 #{verts[i][0]} #{verts[i][1]} #{verts[i][2] + size} 0.0 0.0 0.0 0.0 0.0\n"
+      smd += "0 #{x[0]} #{x[1]} #{x[2]} 0.0 0.0 0.0 0.0 0.0\n"
+      smd += "0 #{y[0]} #{y[1]} #{y[2]} 0.0 0.0 0.0 0.0 0.0\n"
+      smd += "0 #{z[0]} #{z[1]} #{z[2]} 0.0 0.0 0.0 0.0 0.0\n"
     end
 
     smd += "end"
