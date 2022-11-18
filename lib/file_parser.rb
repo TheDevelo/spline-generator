@@ -1,6 +1,6 @@
 require 'matrix'
 
-module Parser
+module FileParser
   def self.parse_log(log)
     # getpos can sometimes return setang a b c\n setpos x y z; instead of normal
     # setpos x y z;setang a b c\n. So search for any instances and fix before parsing.
@@ -45,5 +45,7 @@ module Parser
       v[0] = y
       v[1] = -x
     end
+
+    return verts
   end
 end

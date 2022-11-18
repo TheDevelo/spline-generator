@@ -80,7 +80,7 @@ F6::
         Sleep, 50
     }
 }
-Return        
+Return
       </code></pre>
       Save the script to an .ahk file and run with AutoHotkey. When you're finished feel free to close AutoHotkey.
     </p>
@@ -95,7 +95,7 @@ Return
         const reader = new FileReader();
 
         reader.addEventListener("load", () => {
-          var files = Opal.Kernel.$generate_zip(reader.result, name, size, color, sides)
+          var files = Opal.Kernel.$generate_zip(reader.result, name, radius, color, sides)
           var zip = new JSZip();
           zip.file("botpath_ref.smd", files[0]);
           zip.file("botpath.qc", files[1]);
@@ -107,7 +107,7 @@ Return
               saveAs(content, "botpath-model.zip");
           });
         }, false);
-        
+
         if (file) {
           reader.readAsText(file);
         }
