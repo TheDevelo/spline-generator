@@ -2,11 +2,12 @@ require 'matrix'
 
 module FileParser
   def self.parse_log(log)
+    fp_regex = /[-+]?(?:[0-9]*\.[0-9]+|[0-9]+)/
     # getpos can sometimes return setang a b c\n setpos x y z; instead of normal
     # setpos x y z;setang a b c\n. So search for any instances and fix before parsing.
     # NOTE: Doesn't fix consecutive instances. Would have to loop over and change a line
     # before matching the next, but this bug is rare enough to not matter.
-    log = log.gsub(/^setang ([-.0-9]+) ([-.0-9]+) ([-.0-9]+)\nsetpos ([-.0-9]+) ([-.0-9]+) ([-.0-9]+);/,
+    log = log.gsub(/^setang (#{fp_regex}) (#{fp_regex}) (#{fp_regex})\nsetpos (#{fp_regex}) (#{fp_regex}) (#{fp_regex});/m,
                    "setpos \\4 \\5 \\6;setang \\1 \\2 \\3\n")
 
     # Parse vertices from log
@@ -19,7 +20,7 @@ module FileParser
          elems[0][0] != "setpos" or elems[1][0] != "setang"
         next
       else
-        float_regex = /^[-.0-9]+$/
+        float_regex = /^#{fp_regex}$/
         malformed = false
         (1..3).each do |i|
           malformed = true unless float_regex.match?(elems[0][i]) and float_regex.match?(elems[1][i])
