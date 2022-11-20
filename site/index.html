@@ -91,7 +91,7 @@ Return
         const name = document.getElementById("name").value;
         const radius = document.getElementById("radius").value;
         const sides = document.getElementById("sides").value;
-        const color = document.getElementById("color").value.substring(1);
+        const color = document.getElementById("color").value;
         const reader = new FileReader();
 
         reader.addEventListener("load", () => {
@@ -101,7 +101,7 @@ Return
           zip.file("botpath.qc", files[1]);
           var mats = zip.folder("materials").folder("bp-gen");
           mats.file("botpath.vtf", files[2], { base64: true });
-          mats.file("botpath-" + color + ".vmt", files[3])
+          mats.file("botpath-" + color.substring(1) + ".vmt", files[3])
           zip.generateAsync({type:"blob"})
           .then(function(content) {
               saveAs(content, "botpath-model.zip");

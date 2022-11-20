@@ -1,11 +1,30 @@
 require 'base64'
 
 module Texture
-  def self.generate_unlit_color(color, vtf_name)
-    color_r = color[0..1].to_i(16) / 255.0
-    color_g = color[2..3].to_i(16) / 255.0
-    color_b = color[4..5].to_i(16) / 255.0
+  class Color
+    attr_reader :red, :green, :blue
 
+    def initialize(hex)
+      # Have to use javascript regex for Opal :(
+      raise "Tried to initialize color with invalid format" unless (/\A#[0-9a-zA-Z]{6}\z/).match?(hex)
+      @red = hex[1..2].to_i(16) / 255.0
+      @green = hex[3..4].to_i(16) / 255.0
+      @blue = hex[5..6].to_i(16) / 255.0
+    end
+
+    def to_s(hash: false)
+      red_s = (@red * 255.5).to_i.to_s(16)
+      green_s = (@green * 255.5).to_i.to_s(16)
+      blue_s = (@blue * 255.5).to_i.to_s(16)
+      if hash
+        return "##{red_s}#{green_s}#{blue_s}"
+      else
+        return "#{red_s}#{green_s}#{blue_s}"
+      end
+    end
+  end
+
+  def self.generate_unlit_color(color, vtf_name)
     vtf = Base64.decode64(
       <<~VTFTMP
       VlRGAAcAAAACAAAAUAAAAAQABAABAwAAAQAAAAAAAAAAAIA/AACAPwAAgD8AAAAAAACAPwMAAAAB
@@ -19,7 +38,7 @@ module Texture
     {
         "$basetexture" "#{vtf_name}"
         "$model" "1"
-        "$color2" "[#{color_r} #{color_g} #{color_b}]"
+        "$color2" "[#{color.red} #{color.green} #{color.blue}]"
     }
     VMTTMP
 
