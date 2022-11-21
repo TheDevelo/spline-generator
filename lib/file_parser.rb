@@ -39,7 +39,7 @@ module FileParser
     end
 
     # Studiomdl vertices are rotated compared to in game or in Hammer, so rotate
-    # each vertex 90 degrees counter-clockwise.
+    # each vertex 90 degrees clockwise.
     verts.each do |v|
       x = v[0]
       y = v[1]

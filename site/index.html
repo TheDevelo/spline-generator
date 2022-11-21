@@ -36,6 +36,13 @@
       <label for="color">Botpath Color: </label>
       <input type="color" id="color" name="color" value="#ffffff">
     </div>
+    <div>
+      <label for="split-enable">Split Botpath into multiple models: </label>
+      <input type="checkbox" id="split-enable" name="split-enable">
+      <br/>
+      <label for="prisms">Number of prisms to split per model: </label>
+      <input type="number" id="prisms" name="prisms" value="128" min="1" step="1">
+    </div>
     <input type="button" id="generate" value="Generate">
     <hr/>
     <h2>Generating the movement data</h2>
@@ -92,16 +99,23 @@ Return
         const radius = document.getElementById("radius").value;
         const sides = document.getElementById("sides").value;
         const color = document.getElementById("color").value;
+        prisms = document.getElementById("prisms").value;
         const reader = new FileReader();
 
+        if (!document.getElementById("split-enable").checked) {
+          prisms = Opal.nil;
+        }
+
         reader.addEventListener("load", () => {
-          var files = Opal.Kernel.$generate_zip(reader.result, name, radius, color, sides)
+          var files = Opal.Kernel.$generate_zip(reader.result, name, radius, color, sides, prisms)
           var zip = new JSZip();
-          zip.file("botpath_ref.smd", files[0]);
-          zip.file("botpath.qc", files[1]);
+          files[0].forEach((e,i) => {
+            zip.file("botpath_sec" + (i + 1).toString() + ".smd", e[0]);
+            zip.file("botpath_sec" + (i + 1).toString() + ".qc", e[1]);  
+          });
           var mats = zip.folder("materials").folder("bp-gen");
-          mats.file("botpath.vtf", files[2], { base64: true });
-          mats.file("botpath-" + color.substring(1) + ".vmt", files[3])
+          mats.file("botpath.vtf", files[1], { base64: true });
+          mats.file("botpath-" + color.substring(1) + ".vmt", files[2])
           zip.generateAsync({type:"blob"})
           .then(function(content) {
               saveAs(content, "botpath-model.zip");
