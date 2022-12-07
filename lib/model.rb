@@ -12,23 +12,27 @@ module Model
       norm_vec_diff[i] = (verts[i+1] - verts[i]).normalize
     end
 
-    mitre_planes = [norm_vec_diff[0]]
-    (1...(verts.length - 1)).each do |i|
-      mitre_planes[i] = (norm_vec_diff[i] + norm_vec_diff[i-1]).normalize
+    mitre_planes = []
+    (0...(verts.length - 2)).each do |i|
+      mitre_planes[i] = (norm_vec_diff[i+1] + norm_vec_diff[i]).normalize
     end
-    mitre_planes[-1] = norm_vec_diff[-2]
+    mitre_planes << norm_vec_diff[-1]
 
     skeleton = []
     angle = 2.0 * Math::PI / sides
-    up_vector = Vector[0.0, 0.0, 1.0].project_plane(mitre_planes[0])
+
+    up_vector = Vector[0.0, 0.0, 1.0].project_plane(norm_vec_diff[0])
     up_vector = Vector[1.0, 0.0, 0.0] if up_vector == Vector[0.0, 0.0, 0.0]
+    up_vector *= radius
+    face = [up_vector]
+    (1...sides).each do |n|
+      face << up_vector.rotate_around(norm_vec_diff[0], angle * n)
+    end
+    skeleton << face.map {|v| v + verts[0] }
+
     mitre_planes.each_with_index do |p, i|
-      up_vector = radius * up_vector.project_plane(p).normalize
-      face = [up_vector + verts[i]]
-      (1...sides).each do |n|
-        face << up_vector.rotate_around(p, angle * n) + verts[i]
-      end
-      skeleton << face
+      face = face.map {|v| v.extend_to_plane(norm_vec_diff[i], p) }
+      skeleton << face.map {|v| v + verts[i+1] }
     end
 
     # Initialize .smd array for multiple models

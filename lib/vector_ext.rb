@@ -11,4 +11,8 @@ class Vector
     cross = normal.cross_product orthogonal
     parallel + Math.cos(angle) * orthogonal + Math.sin(angle) * cross
   end
+
+  def extend_to_plane(normal, plane_normal)
+    self - normal * (self.dot plane_normal) / (normal.dot plane_normal)
+  end
 end

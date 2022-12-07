@@ -13,9 +13,9 @@ module Texture
     end
 
     def to_s(hash: false)
-      red_s = (@red * 255.5).to_i.to_s(16)
-      green_s = (@green * 255.5).to_i.to_s(16)
-      blue_s = (@blue * 255.5).to_i.to_s(16)
+      red_s = (@red * 255.5).to_i.to_s(16).rjust(2, "0")
+      green_s = (@green * 255.5).to_i.to_s(16).rjust(2, "0")
+      blue_s = (@blue * 255.5).to_i.to_s(16).rjust(2, "0")
       if hash
         return "##{red_s}#{green_s}#{blue_s}"
       else
