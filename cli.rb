@@ -14,13 +14,14 @@ opt_parser = OptionParser.new do |opts|
 
   opts.accept(Texture::Color) do |hex|
     begin
-      Texture::Color.new(hex)
+      Texture::Color.from_hex(hex)
     rescue
       raise OptionError.new "Color does not match format of #XXXXXX"
     end
   end
 
   opts.on("-c", "--color COLOR", "Change the color of the model", Texture::Color)
+  opts.on("-g", "--gradient COLOR2", "Set the second color for a gradient", Texture::Color)
   opts.on("-n", "--name NAME", "Name of the model after compilation")
   opts.on("-p", "--prisms PRISMS", "Number of connecting prisms between vertices per model", Integer) do |o|
     if o >= 1
@@ -40,8 +41,13 @@ opt_parser = OptionParser.new do |opts|
 end
 opt_parser.parse!(into: params)
 
+if params.include? :gradient and (not params.include? :color)
+  raise OptionError.new "Must specify a primary color if using a gradient"
+end
+
 # Set defaults to parameters not passed in
-params[:color] = Texture::Color.new "#ffffff" unless params.include? :color
+params[:color] = Texture::Color.from_hex("#ffffff") unless params.include? :color
+params[:gradient] = nil unless params.include? :gradient
 params[:name] = "bp-gen/botpath" unless params.include? :name
 params[:prisms] = nil unless params.include? :prisms
 params[:radius] = 4.0 unless params.include? :radius
@@ -59,8 +65,13 @@ if not File.file?(ARGV[0])
 end
 
 verts = FileParser.parse_log(File.read(ARGV[0]))
-vtf, vmt = Texture.generate_unlit_color(params[:color], "bp-gen/botpath")
-model_pairs = Model.generate_model(verts, params[:name], params[:radius], "botpath-#{params[:color].to_s}", "bp-gen", params[:sides], params[:prisms])
+vtf = Texture::VTF
+if params[:gradient].nil?
+  vmt_spec = Texture.generate_unlit_color(params[:color], "bp-gen/botpath")
+else
+  vmt_spec = Texture.generate_unlit_gradient(params[:color], params[:gradient], 16, "bp-gen/botpath")
+end
+model_pairs = Model.generate_model(verts, params[:name], params[:radius], vmt_spec, "bp-gen", params[:sides], params[:prisms])
 
 # Write files
 model_pairs.each_with_index do |pair, i|
@@ -70,4 +81,6 @@ end
 Dir.mkdir("materials/") unless Dir.exist?("materials/")
 Dir.mkdir("materials/bp-gen/") unless Dir.exist?("materials/bp-gen/")
 File.write("materials/bp-gen/botpath.vtf", vtf)
-File.write("materials/bp-gen/botpath-#{params[:color].to_s}.vmt", vmt)
+vmt_spec[0].each do |vmt|
+  File.write("materials/bp-gen/#{vmt.name}.vmt", vmt.text)
+end

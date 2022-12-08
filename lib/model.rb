@@ -3,7 +3,7 @@ require 'matrix'
 require 'vector_ext'
 
 module Model
-  def self.generate_model(verts, name, radius, vmt, material_path, sides, prisms_per_model)
+  def self.generate_model(verts, name, radius, vmt_spec, material_path, sides, prisms_per_model)
     verts = prune_vertices(verts, 0)
 
     # Generate vertex skeleton for model shape
@@ -41,6 +41,7 @@ module Model
     smds = Array.new(num_models, "")
 
     # Add start cap
+    vmt = vmt_spec[0][vmt_spec[1][0]].name
     front_face = skeleton[0]
     (1...(sides-1)).each do |i|
       x = front_face[0]
@@ -55,6 +56,7 @@ module Model
 
     # Add prism for each consecutive pair of vertices
     (0...(skeleton.length - 1)).each do |i|
+      vmt = vmt_spec[0][vmt_spec[1][i % vmt_spec[1].length]].name
       back_face = skeleton[i]
       front_face = skeleton[i+1]
       smd_i = i / prisms_per_model

@@ -37,6 +37,13 @@
       <input type="color" id="color" name="color" value="#ffffff">
     </div>
     <div>
+      <label for="gradient-enable">Enable color gradient: </label>
+      <input type="checkbox" id="gradient-enable" name="gradient-enable">
+      <br/>
+      <label for="gradient">Second gradient color: </label>
+      <input type="color" id="gradient" name="gradient" value="#000000">
+    </div>
+    <div>
       <label for="split-enable">Split Botpath into multiple models: </label>
       <input type="checkbox" id="split-enable" name="split-enable">
       <br/>
@@ -100,14 +107,18 @@ Return
         const sides = document.getElementById("sides").value;
         const color = document.getElementById("color").value;
         prisms = document.getElementById("prisms").value;
+        gradient = document.getElementById("gradient").value;
         const reader = new FileReader();
 
         if (!document.getElementById("split-enable").checked) {
           prisms = Opal.nil;
         }
+        if (!document.getElementById("gradient-enable").checked) {
+          gradient = Opal.nil;
+        }
 
         reader.addEventListener("load", () => {
-          var files = Opal.Kernel.$generate_zip(reader.result, name, radius, color, sides, prisms)
+          var files = Opal.Kernel.$generate_zip(reader.result, name, radius, color, gradient, sides, prisms);
           var zip = new JSZip();
           files[0].forEach((e,i) => {
             zip.file("botpath_sec" + (i + 1).toString() + ".smd", e[0]);
@@ -115,7 +126,9 @@ Return
           });
           var mats = zip.folder("materials").folder("bp-gen");
           mats.file("botpath.vtf", files[1], { base64: true });
-          mats.file("botpath-" + color.substring(1) + ".vmt", files[2])
+          files[2].forEach((e,i) => {
+            mats.file(e[1] + ".vmt", e[0])
+          });
           zip.generateAsync({type:"blob"})
           .then(function(content) {
               saveAs(content, "botpath-model.zip");
