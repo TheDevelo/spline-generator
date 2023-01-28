@@ -22,7 +22,11 @@ module Model
     angle = 2.0 * Math::PI / sides
 
     up_vector = Vector[0.0, 0.0, 1.0].project_plane(norm_vec_diff[0])
-    up_vector = Vector[1.0, 0.0, 0.0] if up_vector == Vector[0.0, 0.0, 0.0]
+    if up_vector == Vector[0.0, 0.0, 0.0]
+      up_vector = Vector[1.0, 0.0, 0.0]
+    else
+      up_vector = up_vector.normalize
+    end
     up_vector *= radius
     face = [up_vector]
     (1...sides).each do |n|
