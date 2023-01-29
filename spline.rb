@@ -293,7 +293,7 @@ def regenerate_spline(spline, spline_meshes, current_point)
     if i == current_point * SAMPLES_PER_SEGMENT or i == current_point * SAMPLES_PER_SEGMENT - 1
       material = Mittsu::MeshBasicMaterial.new(color: 0xffff00)
     elsif i >= (current_point - 1) * SAMPLES_PER_SEGMENT and i < (current_point + 1) * SAMPLES_PER_SEGMENT
-      material = Mittsu::MeshBasicMaterial.new(color: 0x00ffff)
+      material = Mittsu::MeshBasicMaterial.new(color: 0xff00ff)
     else
       material = Mittsu::MeshBasicMaterial.new(color: 0xffffff)
     end
@@ -425,7 +425,7 @@ renderer.window.run do
 
   if renderer.window.key_down?(GLFW_KEY_UP) and up_oneshot
     spline_length += SPLINE_LENGTH_INCREMENT
-    spline[current_point][5] = spline_length
+    spline[current_point][5] = spline_length if current_point != spline.length
     regenerate_spline(spline, spline_meshes, current_point)
     puts "Current spline bend-length: #{spline_length.round(3)}"
     recull = true
@@ -435,7 +435,7 @@ renderer.window.run do
   end
   if renderer.window.key_down?(GLFW_KEY_DOWN) and down_oneshot
     spline_length = [spline_length - SPLINE_LENGTH_INCREMENT, 0.0].max
-    spline[current_point][5] = spline_length
+    spline[current_point][5] = spline_length if current_point != spline.length
     regenerate_spline(spline, spline_meshes, current_point)
     puts "Current spline bend-length: #{spline_length.round(3)}"
     recull = true
@@ -455,6 +455,8 @@ renderer.window.run do
   renderer.render(scene, camera)
   frame += 1
 end
+
+return if spline == []
 
 file_end = 1
 file_end += 1 while File.file?("spline_save_%04d.txt" % file_end)
