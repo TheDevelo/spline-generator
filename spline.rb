@@ -15,8 +15,6 @@ TEXTURE_SCALE = 256.0
 PIXELS_PER_180 = 1000.0
 NOCLIP_SPEED = 8.0
 RENDER_DISTANCE = 4096.0
-CULL_FACTOR = 2.0
-CULL_UPDATE_RATE = 30
 
 if (ARGV.length != 1 and ARGV.length != 2)
   puts "Usage: ruby spline.rb MAP.vmf [SPLINE_SAVE.txt]"
@@ -82,23 +80,23 @@ vmf.each do |line|
 end
 
 # Get the solids we want to render
-sides = parsed_vmf.get_first("world").get_all("solid").map {|s| s.get_all("side")}.flatten
-sides += parsed_vmf.get_all("entity")
+solids = parsed_vmf.get_first("world").get_all("solid").map {|s| s.get_all("side")}
+solids += parsed_vmf.get_all("entity")
   .select {|e| e.get_first("classname") == "func_detail" }
-  .map {|e| e.get_all("solid").map {|s| s.get_all("side")}.flatten }
-  .flatten
-sides = sides.select do |s|
+  .map {|e| e.get_all("solid").map {|s| s.get_all("side")}}
+  .flatten 1
+solids = solids.map {|solid| solid.select do |s|
   material = s.get_first("material").upcase
   material != "TOOLS/TOOLSNODRAW" and
     material != "TOOLS/TOOLSPLAYERCLIP"
-end
+end }.select {|solid| solid.size > 0 }
 
-sides_partition = sides.partition do |s|
+solids_partition = solids.map {|solid| solid.partition do |s|
   material = s.get_first("material").upcase
   material == "TOOLS/TOOLSSKYBOX" or material == "TOOLS/TOOLSSKYBOX2D"
-end
-sky_sides = sides_partition[0]
-solid_sides = sides_partition[1]
+end }
+sky_solids = solids_partition.map {|s| s[0] }
+textured_solids = solids_partition.map {|s| s[1] }
 
 # Load spline save file if specified
 save_loaded = false
@@ -156,53 +154,51 @@ end
 # Initialize rendering
 renderer = Mittsu::OpenGLRenderer.new width: SCREEN_WIDTH, height: SCREEN_HEIGHT, title: 'Spline Helper'
 scene = Mittsu::Scene.new
+scene.auto_update = false
 camera = Mittsu::PerspectiveCamera.new(90.0, ASPECT, 1.0, RENDER_DISTANCE)
 
 # Construct Mittsu meshes from the VMF solids
 # Uses Hammer++ specific fields so that I don't have to calculate plane intersections
 # Just open and save a VMF through Hammer++ to generate said fields
-def construct_geometry_from_side(side)
-  verts = side.get_first("vertices_plus").get_all("v").map {|v| v.split(" ").map {|s| s.to_f }}
-  offset = verts.transpose.map {|c| c.sum / c.length.to_f }
-  verts = verts.map {|v| v.zip(offset).map {|p| p[0] - p[1]}}
-  triangulated_side = []
-  (1...(verts.length - 1)).each do |i|
-    triangulated_side << verts[0]
-    triangulated_side << verts[i+1]
-    triangulated_side << verts[i]
-  end
+def construct_geometry_from_solid(solid)
+  verts = solid.map {|side| side.get_first("vertices_plus").get_all("v").map {|v| v.split(" ").map {|s| s.to_f }}}
+  side_vert_counts = verts.map {|side| side.length }
+  verts = verts.flatten 1
 
   # Manually construct a geometry object as desired
   geometry = Mittsu::Geometry.new
-  geometry.vertices = triangulated_side.map {|v| Mittsu::Vector3.new(v[0], v[1], v[2]) }
-  (0...(triangulated_side.length / 3)).each do |i|
-    geometry.faces << Mittsu::Face3.new(3*i, 3*i + 1, 3*i + 2, nil, nil)
+  geometry.vertices = verts.map {|v| Mittsu::Vector3.new(v[0], v[1], v[2]) }
+  vert_count_sum = 0
+  side_vert_counts.each do |vert_count|
+    (1...(vert_count - 1)).each do |i|
+      geometry.faces << Mittsu::Face3.new(vert_count_sum, i + 1 + vert_count_sum, i + vert_count_sum, nil, nil)
+    end
+    vert_count_sum += vert_count
   end
   geometry.compute_face_normals
-  face_color = nil
   geometry.faces.each_with_index do |face, i|
-    face_color ||= Mittsu::Color.new(face.normal.x / 2.0 + 0.5, face.normal.y / 2.0 + 0.5, face.normal.z / 2.0 + 0.5)
-    uv_a = calc_uvs(triangulated_side[face.a], offset, face.normal)
-    uv_b = calc_uvs(triangulated_side[face.b], offset, face.normal)
-    uv_c = calc_uvs(triangulated_side[face.c], offset, face.normal)
+    face.color = Mittsu::Color.new(face.normal.x / 2.0 + 0.5, face.normal.y / 2.0 + 0.5, face.normal.z / 2.0 + 0.5)
+    uv_a = calc_uvs(verts[face.a], face.normal)
+    uv_b = calc_uvs(verts[face.b], face.normal)
+    uv_c = calc_uvs(verts[face.c], face.normal)
     geometry.face_vertex_uvs[0][i] = [uv_a, uv_b, uv_c]
   end
-  return geometry, face_color, offset
+  return geometry
 end
 
-def calc_uvs(vertex, offset, normal)
+def calc_uvs(vertex, normal)
   u = 0.0
   v = 0.0
   if normal.x.abs <= normal.y.abs
-    u = (vertex[0] + offset[0]) / TEXTURE_SCALE
+    u = (vertex[0]) / TEXTURE_SCALE
     if normal.z.abs <= normal.y.abs
-      v = (vertex[2] + offset[2]) / TEXTURE_SCALE
+      v = (vertex[2]) / TEXTURE_SCALE
     else
-      v = (vertex[1] + offset[1]) / TEXTURE_SCALE
+      v = (vertex[1]) / TEXTURE_SCALE
     end
   else
-    u = (vertex[1] + offset[1]) / TEXTURE_SCALE
-    v = (vertex[2] + offset[2]) / TEXTURE_SCALE
+    u = (vertex[1]) / TEXTURE_SCALE
+    v = (vertex[2]) / TEXTURE_SCALE
   end
 
   Mittsu::Vector2.new(u, v)
@@ -212,22 +208,22 @@ texture = Mittsu::ImageUtils.load_texture(File.join(File.dirname(__FILE__), 'wal
 texture.wrap_s = Mittsu::RepeatWrapping
 texture.wrap_t = Mittsu::RepeatWrapping
 texture.mag_filter = Mittsu::NearestFilter
+textured_material = Mittsu::MeshBasicMaterial.new(map: texture)
+textured_material.vertex_colors = Mittsu::FaceColors
 sky_material = Mittsu::MeshBasicMaterial.new(color: 0x00ffff)
 
-meshes = []
-sky_sides.each do |side|
-  geometry, _, offset = construct_geometry_from_side(side)
-  mesh_side = Mittsu::Mesh.new(geometry, sky_material)
-  mesh_side.position = Mittsu::Vector3.new(offset[0], offset[1], offset[2])
-  meshes << mesh_side
+sky_solids.each do |solid|
+  geometry = construct_geometry_from_solid(solid)
+  mesh = Mittsu::Mesh.new(geometry, sky_material)
+  scene.add(mesh)
 end
-solid_sides.each do |side|
-  geometry, color, offset = construct_geometry_from_side(side)
-  solid_material = Mittsu::MeshBasicMaterial.new(map: texture, color: color)
-  mesh_side = Mittsu::Mesh.new(geometry, solid_material)
-  mesh_side.position = Mittsu::Vector3.new(offset[0], offset[1], offset[2])
-  meshes << mesh_side
+textured_solids.each do |solid|
+  geometry = construct_geometry_from_solid(solid)
+  mesh = Mittsu::Mesh.new(geometry, textured_material)
+  scene.add(mesh)
 end
+
+scene.update_matrix_world
 
 # Spline code
 spline_meshes = []
@@ -279,13 +275,16 @@ def sample_spline(spline)
   sampled_points << control_points[-1][-1]
 end
 
-def regenerate_spline(spline, spline_meshes, current_point)
+def regenerate_spline(spline, current_point, spline_meshes, scene)
   return if spline.length <= 1
 
   sampled_points = sample_spline(spline).map {|p| Mittsu::Vector3.new(p[0], p[1], p[2]) }
+  spline_meshes.each do |m|
+    scene.remove(m)
+  end
+  spline_meshes = spline_meshes.clear
 
   # Construct meshes
-  spline_meshes = spline_meshes.clear
   (0...(sampled_points.length - 1)).each do |i|
     distance = Math.sqrt(sampled_points[i].distance_to_squared(sampled_points[i+1]))
     geometry = Mittsu::BoxGeometry.new(4.0, 4.0, distance)
@@ -302,8 +301,11 @@ def regenerate_spline(spline, spline_meshes, current_point)
     mesh.position = sampled_points[i]
     mesh.look_at(sampled_points[i+1])
     mesh.translate_on_axis(Mittsu::Vector3.new(0.0, 0.0, 1.0), distance / 2)
+    scene.add(mesh)
     spline_meshes << mesh
   end
+
+  scene.update_matrix_world
 end
 
 def snap(value, snap_value)
@@ -311,7 +313,7 @@ def snap(value, snap_value)
 end
 
 if save_loaded
-  regenerate_spline(spline, spline_meshes, current_point)
+  regenerate_spline(spline, current_point, spline_meshes, scene)
 end
 
 # Spline export
@@ -328,7 +330,6 @@ end
 renderer.window.set_mouselock(true)
 frame = 0
 y_center = 0.0
-recull = true
 spacebar_oneshot = true
 left_oneshot = true
 right_oneshot = true
@@ -336,18 +337,6 @@ up_oneshot = true
 down_oneshot = true
 export_oneshot = true
 renderer.window.run do
-  # Cull objects that are too far to speed up the rendering process
-  if frame % CULL_UPDATE_RATE == 0 or recull
-    scene.children = []
-    (meshes + spline_meshes).each do |m|
-      diff = camera.get_world_position.sub(m.get_world_position)
-      if diff.x.abs + diff.y.abs + diff.z.abs < RENDER_DISTANCE * CULL_FACTOR
-        scene.add(m)
-      end
-    end
-    recull = false
-  end
-
   if renderer.window.key_down?(GLFW_KEY_ESCAPE)
     renderer.window.set_mouselock(false)
   end
@@ -395,8 +384,7 @@ renderer.window.run do
     spline[current_point] = new_point
 
     current_point += 1
-    regenerate_spline(spline, spline_meshes, current_point)
-    recull = true
+    regenerate_spline(spline, current_point, spline_meshes, scene)
     spacebar_oneshot = false
   elsif not renderer.window.key_down?(GLFW_KEY_SPACE)
     spacebar_oneshot = true
@@ -405,9 +393,8 @@ renderer.window.run do
   if renderer.window.key_down?(GLFW_KEY_LEFT) and left_oneshot
     current_point = [current_point - 1, 0].max
     spline_length = spline[current_point][5]
-    regenerate_spline(spline, spline_meshes, current_point)
+    regenerate_spline(spline, current_point, spline_meshes, scene)
     puts "Current spline bend-length: #{spline_length.round(3)}"
-    recull = true
     left_oneshot = false
   elsif not renderer.window.key_down?(GLFW_KEY_LEFT)
     left_oneshot = true
@@ -415,9 +402,8 @@ renderer.window.run do
   if renderer.window.key_down?(GLFW_KEY_RIGHT) and right_oneshot
     current_point = [current_point + 1, spline.length].min
     spline_length = spline[current_point][5] if current_point != spline.length
-    regenerate_spline(spline, spline_meshes, current_point)
+    regenerate_spline(spline, current_point, spline_meshes, scene)
     puts "Current spline bend-length: #{spline_length.round(3)}"
-    recull = true
     right_oneshot = false
   elsif not renderer.window.key_down?(GLFW_KEY_RIGHT)
     right_oneshot = true
@@ -426,9 +412,8 @@ renderer.window.run do
   if renderer.window.key_down?(GLFW_KEY_UP) and up_oneshot
     spline_length += SPLINE_LENGTH_INCREMENT
     spline[current_point][5] = spline_length if current_point != spline.length
-    regenerate_spline(spline, spline_meshes, current_point)
+    regenerate_spline(spline, current_point, spline_meshes, scene)
     puts "Current spline bend-length: #{spline_length.round(3)}"
-    recull = true
     up_oneshot = false
   elsif not renderer.window.key_down?(GLFW_KEY_UP)
     up_oneshot = true
@@ -436,9 +421,8 @@ renderer.window.run do
   if renderer.window.key_down?(GLFW_KEY_DOWN) and down_oneshot
     spline_length = [spline_length - SPLINE_LENGTH_INCREMENT, 0.0].max
     spline[current_point][5] = spline_length if current_point != spline.length
-    regenerate_spline(spline, spline_meshes, current_point)
+    regenerate_spline(spline, current_point, spline_meshes, scene)
     puts "Current spline bend-length: #{spline_length.round(3)}"
-    recull = true
     down_oneshot = false
   elsif not renderer.window.key_down?(GLFW_KEY_DOWN)
     down_oneshot = true
