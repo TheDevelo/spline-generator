@@ -3,6 +3,10 @@ require 'matrix'
 module FileParser
   def self.parse_log(log)
     fp_regex = /[-+]?(?:[0-9]*\.[0-9]+|[0-9]+)/
+
+    # Replace _exact variants with the inexact variants for easier parsing
+    log = log.gsub("setpos_exact", "setpos").gsub("setang_exact", "setang")
+
     # getpos can sometimes return setang a b c\n setpos x y z; instead of normal
     # setpos x y z;setang a b c\n. So search for any instances and fix before parsing.
     # NOTE: Doesn't fix consecutive instances. Would have to loop over and change a line
