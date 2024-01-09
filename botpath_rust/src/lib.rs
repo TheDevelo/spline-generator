@@ -1,4 +1,5 @@
 mod texture;
+mod map;
 
 use winit::{
     event::*,
@@ -9,44 +10,9 @@ use wgpu::util::DeviceExt;
 #[cfg(target_arch="wasm32")]
 use wasm_bindgen::prelude::*;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    tex_coords: [f32; 2],
+pub trait Vertex {
+    fn desc() -> wgpu::VertexBufferLayout<'static>;
 }
-
-impl Vertex {
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x2,
-                }
-            ]
-        }
-    }
-}
-
-
-const VERTICES: &[Vertex] = &[
-    Vertex { position: [-0.5, -0.5, 0.0], tex_coords: [1.0, 0.0] },
-    Vertex { position: [0.5, -0.5, 0.0], tex_coords: [0.0, 0.0] },
-    Vertex { position: [-0.5, 0.5, 0.0], tex_coords: [1.0, 1.0] },
-
-    Vertex { position: [0.5, -0.5, 0.0], tex_coords: [0.0, 0.0] },
-    Vertex { position: [0.5, 0.5, 0.0], tex_coords: [0.0, 1.0] },
-    Vertex { position: [-0.5, 0.5, 0.0], tex_coords: [1.0, 1.0] },
-];
 
 #[rustfmt::skip]
 pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
@@ -190,8 +156,6 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    num_vertices: u32,
     wall_texture_bind_group: wgpu::BindGroup,
     wall_texture: texture::Texture,
     camera: Camera,
@@ -200,6 +164,7 @@ struct State {
     camera_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
     depth_texture: texture::Texture,
+    map: map::Map,
 }
 
 impl State {
@@ -296,13 +261,13 @@ impl State {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
 
         let camera = Camera {
-            eye: (0.0, 1.0, 2.0).into(),
+            eye: (10000.0, 0.0, 3000.0).into(),
             target: (0.0, 0.0, 0.0).into(),
             up: cgmath::Vector3::unit_y(),
             aspect: config.width as f32 / config.height as f32,
             fovy: 45.0,
-            znear: 0.1,
-            zfar: 100.0,
+            znear: 1.0,
+            zfar: 10000.0,
         };
 
         let mut camera_uniform = CameraUniform::new();
@@ -359,7 +324,7 @@ impl State {
                 module: &shader,
                 entry_point: "vs_main",
                 buffers: &[
-                    Vertex::desc(),
+                    map::MapVertex::desc(),
                 ],
             },
             fragment: Some(wgpu::FragmentState {
@@ -395,15 +360,11 @@ impl State {
             multiview: None,
         });
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        // TODO: replace the hard-coded FS read with a file chooser (for both web and desktop)
+        let map_vmf = std::fs::read_to_string("test.vmf").unwrap();
+        let map = map::Map::from_string(&map_vmf, &device).unwrap();
 
-        let num_vertices = VERTICES.len() as u32;
-
-        let camera_controller = CameraController::new(0.2);
+        let camera_controller = CameraController::new(50.0);
 
         Self {
             window,
@@ -413,8 +374,6 @@ impl State {
             config,
             size,
             render_pipeline,
-            vertex_buffer,
-            num_vertices,
             wall_texture_bind_group,
             wall_texture,
             camera,
@@ -423,6 +382,7 @@ impl State {
             camera_bind_group,
             camera_controller,
             depth_texture,
+            map,
         }
     }
 
@@ -491,8 +451,7 @@ impl State {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.wall_texture_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.draw(0..self.num_vertices, 0..1);
+            self.map.draw(&mut render_pass);
         }
 
         // submit will accept anything that implements IntoIter

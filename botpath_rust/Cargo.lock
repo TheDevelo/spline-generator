@@ -216,6 +216,7 @@ dependencies = [
  "image",
  "log",
  "pollster",
+ "regex",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
