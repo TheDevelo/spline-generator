@@ -131,13 +131,14 @@ impl Map {
 const TEXTURE_SCALE: f32 = 256.0;
 
 // Function to calculate the UV values for a given vertex. The UV values are scaled world-space XYZ
-// coordinates, with the two axes selected to minimize texture stretching.
+// coordinates, with the two axes selected to minimize texture stretching. The two axes that
+// minimize stretching are the two that contribute to the normal the least
 fn calculate_uvs(vertex: &Vector3<f32>, normal: &Vector3<f32>) -> Vector2<f32> {
-    if normal.x.abs() <= normal.y.abs() && normal.z.abs() <= normal.y.abs() {
-        return Vector2::new(vertex.x / TEXTURE_SCALE, vertex.z / TEXTURE_SCALE);
-    }
-    else if normal.x.abs() <= normal.y.abs() {
+    if normal.x.abs() <= normal.z.abs() && normal.y.abs() <= normal.z.abs() {
         return Vector2::new(vertex.x / TEXTURE_SCALE, vertex.y / TEXTURE_SCALE);
+    }
+    else if normal.x.abs() <= normal.y.abs() && normal.z.abs() <= normal.y.abs() {
+        return Vector2::new(vertex.x / TEXTURE_SCALE, vertex.z / TEXTURE_SCALE);
     }
     else {
         return Vector2::new(vertex.y / TEXTURE_SCALE, vertex.z / TEXTURE_SCALE);
