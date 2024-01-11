@@ -6,7 +6,7 @@ use instant::Duration;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
-    window::{WindowBuilder, Window},
+    window::{CursorGrabMode, WindowBuilder, Window},
 };
 use wgpu::util::DeviceExt;
 #[cfg(target_arch="wasm32")]
@@ -51,6 +51,7 @@ struct State {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_controller: camera::CameraController,
+    camera_lock: bool,
     depth_texture: texture::Texture,
     map: map::Map,
 }
@@ -269,6 +270,7 @@ impl State {
             camera_buffer,
             camera_bind_group,
             camera_controller,
+            camera_lock: false,
             depth_texture,
             map,
         }
@@ -292,11 +294,57 @@ impl State {
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
-        self.camera_controller.process_events(event)
+        if self.camera_controller.process_events(event) {
+            return true;
+        }
+
+        match event {
+            WindowEvent::KeyboardInput {
+                input: KeyboardInput {
+                    state,
+                    virtual_keycode: Some(keycode),
+                    ..
+                },
+                ..
+            } => {
+                if *state == ElementState::Pressed {
+                    match keycode {
+                        VirtualKeyCode::Z => {
+                            self.camera_lock = !self.camera_lock;
+                            if self.camera_lock {
+                                // Lock and hide the mouse. Since winit (at least currently)
+                                // doesn't support locked mode on all relevant platforms, use
+                                // confined mode as a fallback.
+                                if self.window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+                                    if self.window.set_cursor_grab(CursorGrabMode::Confined).is_err() {
+                                        eprintln!("failed to properly set the cursor grab mode!");
+                                    }
+                                }
+                                self.window.set_cursor_visible(false);
+                            }
+                            else {
+                                if self.window.set_cursor_grab(CursorGrabMode::None).is_err() {
+                                    eprintln!("failed to properly unset the cursor grab mode!");
+                                }
+                                self.window.set_cursor_visible(true);
+                            }
+                            return true;
+                        }
+                        _ => {}
+                    }
+                }
+            },
+            _ => {}
+        }
+
+        return false;
     }
 
     fn input_mouse_delta(&mut self, delta: (f64, f64)) {
-        self.camera_controller.process_mouse(delta)
+        // Only send mouse input to the camera controller if we have locked the mouse
+        if self.camera_lock {
+            self.camera_controller.process_mouse(delta)
+        }
     }
 
     fn update(&mut self, dt: Duration) {
@@ -426,6 +474,7 @@ pub async fn run() {
                 let dt = now - last_render_time;
                 last_render_time = now;
                 state.update(dt);
+
                 match state.render() {
                     Ok(_) => {}
                     // Reconfigure the surface if lost
