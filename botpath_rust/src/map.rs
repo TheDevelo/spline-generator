@@ -217,10 +217,17 @@ impl VMFEntry {
         }
     }
 
-    fn get_all(&self, key: &str) -> Result<&Vec<VMFEntry>> {
+    fn get_all(&self, key: &str) -> Result<&[VMFEntry]> {
         if let VMFEntry::Branch(branch) = self {
-            let values = branch.get(key).ok_or(anyhow!("VMF branch doesn't contain specified key"))?;
-            return Ok(values);
+            let values = branch.get(key);
+            if let Some(values) = values {
+                return Ok(values);
+            }
+            else {
+                // Return an empty slice when we don't have a key. This allows for our VMF parsing
+                // to work even if we have no occurances of an element.
+                return Ok(&[] as &[VMFEntry]);
+            }
         }
         else {
             bail!("can't call get_all on a VMF leaf");

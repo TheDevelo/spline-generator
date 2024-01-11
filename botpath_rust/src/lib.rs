@@ -155,7 +155,7 @@ impl State {
             pitch: cgmath::Rad(0.0),
             yaw: cgmath::Rad(0.0),
             aspect: config.width as f32 / config.height as f32,
-            fovy: 45.0,
+            fovy: 60.0,
             znear: 1.0,
             zfar: 10000.0,
         };
