@@ -16,6 +16,7 @@ instant = "0.1"
 log = "0.4"
 pollster = "0.3"
 regex = "1.10"
+rfd = "0.12"
 winit = "0.28"
 wgpu = "0.18"
 

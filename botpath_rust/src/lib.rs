@@ -3,6 +3,7 @@ mod map;
 mod texture;
 
 use instant::Duration;
+use rfd::AsyncFileDialog;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -249,9 +250,12 @@ impl State {
             multiview: None,
         });
 
-        // TODO: replace the hard-coded FS read with a file chooser (for both web and desktop)
-        let map_vmf = std::fs::read_to_string("test.vmf").unwrap();
-        let map = map::Map::from_string(&map_vmf, &device).unwrap();
+        let map_vmf_file = AsyncFileDialog::new()
+            .add_filter("VMF", &["vmf"])
+            .pick_file()
+            .await;
+        let map_vmf_str = String::from_utf8(map_vmf_file.unwrap().read().await).unwrap();
+        let map = map::Map::from_string(&map_vmf_str, &device).unwrap();
 
         let camera_controller = camera::CameraController::new(2500.0, std::f32::consts::PI / 1000.0);
 
