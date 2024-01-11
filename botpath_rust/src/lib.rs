@@ -55,6 +55,9 @@ struct State {
     camera_lock: bool,
     depth_texture: texture::Texture,
     map: map::Map,
+    egui_context: egui::Context,
+    egui_state: egui_winit::State,
+    egui_renderer: egui_wgpu::Renderer,
 }
 
 impl State {
@@ -259,6 +262,20 @@ impl State {
 
         let camera_controller = camera::CameraController::new(2500.0, std::f32::consts::PI / 1000.0);
 
+        let egui_context = egui::Context::default();
+        let egui_state = egui_winit::State::new(
+            egui::viewport::ViewportId::ROOT,
+            &window,
+            Some(window.scale_factor() as f32),
+            None
+        );
+        let egui_renderer = egui_wgpu::renderer::Renderer::new(
+            &device,
+            config.format,
+            None,
+            1
+        );
+
         Self {
             window,
             surface,
@@ -277,6 +294,9 @@ impl State {
             camera_lock: false,
             depth_texture,
             map,
+            egui_context,
+            egui_state,
+            egui_renderer,
         }
     }
 
@@ -298,10 +318,28 @@ impl State {
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
+        // Start by letting egui handle any inputs first. Then if the input wasn't consumed, we can
+        // handle it ourselves. The one edge case is when camera lock is enabled. We don't want our
+        // mouse/keyboard to affect egui, so don't forward if camera lock is enabled.
+        // This might cause issues if some non-input events happens (such as window resize), but
+        // those events shouldn't happen during camera lock.
+        let mut response = egui_winit::EventResponse { consumed: false, repaint: false };
+        if !self.camera_lock {
+            response = self.egui_state.on_window_event(&self.egui_context, event);
+        }
+        if response.repaint {
+            self.window.request_redraw();
+        }
+        if response.consumed {
+            return true;
+        }
+
+        // Camera controller events
         if self.camera_controller.process_events(event) {
             return true;
         }
 
+        // Camera lock related events
         match event {
             WindowEvent::KeyboardInput {
                 input: KeyboardInput {
@@ -338,6 +376,13 @@ impl State {
                     }
                 }
             },
+            WindowEvent::Focused(focused) if *focused == false => {
+                self.camera_lock = false;
+                if self.window.set_cursor_grab(CursorGrabMode::None).is_err() {
+                    eprintln!("failed to properly unset the cursor grab mode!");
+                }
+                self.window.set_cursor_visible(true);
+            },
             _ => {}
         }
 
@@ -357,16 +402,17 @@ impl State {
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
 
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, total_t: Duration) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
 
+        // 3D Scene Render Pass
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
+                label: Some("3D Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -396,6 +442,59 @@ impl State {
             render_pass.set_bind_group(0, &self.wall_texture_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             self.map.draw(&mut render_pass);
+        }
+
+        // egui Render Pass
+        let mut raw_input = self.egui_state.take_egui_input(&self.window);
+        raw_input.time = Some(total_t.as_secs_f64());
+
+        let full_ouptut = self.egui_context.run(raw_input, |ctx| {
+            let height_pts = (self.size.height as f32) / ctx.pixels_per_point();
+            egui::Window::new("Path Controls")
+                .anchor(egui::Align2::RIGHT_TOP, (-10.0, 10.0))
+                .fixed_size((300.0, height_pts - 55.0))
+                .show(&ctx, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.set_height(ui.available_height());
+                    ui.label("Controls:");
+                    ui.label("WASD: Move around");
+                    ui.label("Z: Toggle mouse capture, allowing camera control");
+                    ui.label("Mouse: Aim the camera");
+                });
+        });
+
+        self.egui_state.handle_platform_output(&self.window, &self.egui_context, full_ouptut.platform_output);
+
+        let screen_desc = egui_wgpu::renderer::ScreenDescriptor {
+            size_in_pixels: self.size.into(),
+            pixels_per_point: full_ouptut.pixels_per_point,
+        };
+        let tris = self.egui_context.tessellate(full_ouptut.shapes, full_ouptut.pixels_per_point);
+        for (id, image_delta) in &full_ouptut.textures_delta.set {
+            self.egui_renderer.update_texture(&self.device, &self.queue, *id, &image_delta);
+        }
+        self.egui_renderer.update_buffers(&self.device, &self.queue, &mut encoder, &tris, &screen_desc);
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("egui Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+            self.egui_renderer.render(&mut render_pass, &tris, &screen_desc);
+        }
+
+        for free_tex in &full_ouptut.textures_delta.free {
+            self.egui_renderer.free_texture(free_tex);
         }
 
         // submit will accept anything that implements IntoIter
@@ -439,6 +538,7 @@ pub async fn run() {
     }
 
     let mut state = State::new(window).await;
+    let mut total_time = instant::Duration::ZERO;
     let mut last_render_time = instant::Instant::now();
 
     event_loop.run(move |event, _, control_flow| {
@@ -476,10 +576,11 @@ pub async fn run() {
             Event::RedrawRequested(window_id) if window_id == state.window().id() => {
                 let now = instant::Instant::now();
                 let dt = now - last_render_time;
+                total_time += dt;
                 last_render_time = now;
                 state.update(dt);
 
-                match state.render() {
+                match state.render(total_time) {
                     Ok(_) => {}
                     // Reconfigure the surface if lost
                     Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
