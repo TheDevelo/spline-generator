@@ -121,6 +121,29 @@ impl Map {
         })
     }
 
+    // Empty map that gets used at startup. Have this so we don't have to have special rendering
+    // logic if there is no map loaded.
+    pub fn empty(device: &wgpu::Device) -> Self {
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Empty Map Vertex Buffer"),
+            size: 0,
+            usage: wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
+        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Emtpy Map Index Buffer"),
+            size: 0,
+            usage: wgpu::BufferUsages::INDEX,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            vertex_buffer,
+            index_buffer,
+            index_count: 0,
+        }
+    }
+
     pub fn draw<'s>(&'s self, render_pass: &mut wgpu::RenderPass<'s>) {
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);

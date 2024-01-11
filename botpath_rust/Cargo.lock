@@ -248,6 +248,7 @@ dependencies = [
  "image",
  "instant",
  "log",
+ "noop-waker",
  "pollster",
  "regex",
  "rfd",
@@ -1334,6 +1335,12 @@ name = "nohash-hasher"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
+
+[[package]]
+name = "noop-waker"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56902c3f29ce7afbecc1d088dfd2e3108033f3c02041c70788ed94280a3d5261"
 
 [[package]]
 name = "num-integer"

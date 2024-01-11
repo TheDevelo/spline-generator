@@ -1,9 +1,9 @@
 mod camera;
+mod gui;
 mod map;
 mod texture;
 
 use instant::Duration;
-use rfd::AsyncFileDialog;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -55,9 +55,7 @@ struct State {
     camera_lock: bool,
     depth_texture: texture::Texture,
     map: map::Map,
-    egui_context: egui::Context,
-    egui_state: egui_winit::State,
-    egui_renderer: egui_wgpu::Renderer,
+    gui: gui::Gui,
 }
 
 impl State {
@@ -253,28 +251,11 @@ impl State {
             multiview: None,
         });
 
-        let map_vmf_file = AsyncFileDialog::new()
-            .add_filter("VMF", &["vmf"])
-            .pick_file()
-            .await;
-        let map_vmf_str = String::from_utf8(map_vmf_file.unwrap().read().await).unwrap();
-        let map = map::Map::from_string(&map_vmf_str, &device).unwrap();
+        let map = map::Map::empty(&device);
 
         let camera_controller = camera::CameraController::new(2500.0, std::f32::consts::PI / 1000.0);
 
-        let egui_context = egui::Context::default();
-        let egui_state = egui_winit::State::new(
-            egui::viewport::ViewportId::ROOT,
-            &window,
-            Some(window.scale_factor() as f32),
-            None
-        );
-        let egui_renderer = egui_wgpu::renderer::Renderer::new(
-            &device,
-            config.format,
-            None,
-            1
-        );
+        let gui = gui::Gui::new(&window, &device, config.format);
 
         Self {
             window,
@@ -294,9 +275,7 @@ impl State {
             camera_lock: false,
             depth_texture,
             map,
-            egui_context,
-            egui_state,
-            egui_renderer,
+            gui,
         }
     }
 
@@ -325,7 +304,7 @@ impl State {
         // those events shouldn't happen during camera lock.
         let mut response = egui_winit::EventResponse { consumed: false, repaint: false };
         if !self.camera_lock {
-            response = self.egui_state.on_window_event(&self.egui_context, event);
+            response = self.gui.input(event);
         }
         if response.repaint {
             self.window.request_redraw();
@@ -400,9 +379,15 @@ impl State {
         self.camera_controller.update_camera(&mut self.camera, dt);
         self.camera_uniform.update_view_proj(&self.camera);
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
+
+        // Process updates from the GUI
+        let gui_updates = self.gui.update();
+        if let Some(vmf) = gui_updates.map_vmf {
+            self.map = map::Map::from_string(&vmf, &self.device).unwrap();
+        }
     }
 
-    fn render(&mut self, total_t: Duration) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, total_time: Duration) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -445,57 +430,11 @@ impl State {
         }
 
         // egui Render Pass
-        let mut raw_input = self.egui_state.take_egui_input(&self.window);
-        raw_input.time = Some(total_t.as_secs_f64());
-
-        let full_ouptut = self.egui_context.run(raw_input, |ctx| {
-            let height_pts = (self.size.height as f32) / ctx.pixels_per_point();
-            egui::Window::new("Path Controls")
-                .anchor(egui::Align2::RIGHT_TOP, (-10.0, 10.0))
-                .fixed_size((300.0, height_pts - 55.0))
-                .show(&ctx, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.set_height(ui.available_height());
-                    ui.label("Controls:");
-                    ui.label("WASD: Move around");
-                    ui.label("Z: Toggle mouse capture, allowing camera control");
-                    ui.label("Mouse: Aim the camera");
-                });
-        });
-
-        self.egui_state.handle_platform_output(&self.window, &self.egui_context, full_ouptut.platform_output);
-
         let screen_desc = egui_wgpu::renderer::ScreenDescriptor {
             size_in_pixels: self.size.into(),
-            pixels_per_point: full_ouptut.pixels_per_point,
+            pixels_per_point: self.window.scale_factor() as f32,
         };
-        let tris = self.egui_context.tessellate(full_ouptut.shapes, full_ouptut.pixels_per_point);
-        for (id, image_delta) in &full_ouptut.textures_delta.set {
-            self.egui_renderer.update_texture(&self.device, &self.queue, *id, &image_delta);
-        }
-        self.egui_renderer.update_buffers(&self.device, &self.queue, &mut encoder, &tris, &screen_desc);
-
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("egui Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
-            self.egui_renderer.render(&mut render_pass, &tris, &screen_desc);
-        }
-
-        for free_tex in &full_ouptut.textures_delta.free {
-            self.egui_renderer.free_texture(free_tex);
-        }
+        self.gui.render(&self.device, &self.queue, &mut encoder, &view, &self.window, total_time.as_secs_f64(), screen_desc);
 
         // submit will accept anything that implements IntoIter
         self.queue.submit(std::iter::once(encoder.finish()));
