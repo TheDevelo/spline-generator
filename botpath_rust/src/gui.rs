@@ -18,7 +18,7 @@ pub struct Gui {
 
     // gui state
     menu_selection: GuiMenu,
-    vmf_future: Option<Pin<Box<dyn Future<Output = String>>>>,
+    vmf_future: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
 }
 
 #[derive(Eq, PartialEq)]
@@ -75,7 +75,10 @@ impl Gui {
             let poll_result = vmf_future.as_mut().poll(&mut ctx);
             if let std::task::Poll::Ready(vmf) = poll_result {
                 // vmf_future is ready, so update map
-                world.map = map::Map::from_string(&vmf, &render_state.device).unwrap();
+                // check if we managed to actually load a vmf file first
+                if let Some(vmf) = vmf {
+                    world.map = map::Map::from_string(&vmf, &render_state.device).unwrap();
+                }
                 self.vmf_future = None;
             }
         }
@@ -127,7 +130,12 @@ impl Gui {
                                         .add_filter("VMF", &["vmf"])
                                         .pick_file()
                                         .await;
-                                    String::from_utf8(map_vmf_file.unwrap().read().await).unwrap()
+                                    if let Some(map_vmf_file) = map_vmf_file {
+                                        String::from_utf8(map_vmf_file.read().await).ok()
+                                    }
+                                    else {
+                                        None
+                                    }
                                 }));
                             }
                         },
