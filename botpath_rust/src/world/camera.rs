@@ -1,7 +1,8 @@
 use cgmath::{Deg, Point3, Matrix4, Rad, Vector3};
-use instant::Duration;
 use std::f32::consts::FRAC_PI_2;
+use web_time::Duration;
 use winit::event::*;
+use winit::keyboard::Key;
 
 const SAFE_FRAC_PI_2: f32 = FRAC_PI_2 - 0.0001;
 
@@ -85,28 +86,28 @@ impl CameraController {
     pub fn process_events(&mut self, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::KeyboardInput {
-                input: KeyboardInput {
+                event: KeyEvent {
                     state,
-                    virtual_keycode: Some(keycode),
+                    logical_key,
                     ..
                 },
                 ..
             } => {
                 let is_pressed = *state == ElementState::Pressed;
-                match keycode {
-                    VirtualKeyCode::W => {
+                match logical_key.as_ref() {
+                    Key::Character("w") | Key::Character("W") => {
                         self.is_forward_pressed = is_pressed;
                         true
                     }
-                    VirtualKeyCode::A => {
+                    Key::Character("a") | Key::Character("A") => {
                         self.is_left_pressed = is_pressed;
                         true
                     }
-                    VirtualKeyCode::S => {
+                    Key::Character("s") | Key::Character("S") => {
                         self.is_backward_pressed = is_pressed;
                         true
                     }
-                    VirtualKeyCode::D => {
+                    Key::Character("d") | Key::Character("D") => {
                         self.is_right_pressed = is_pressed;
                         true
                     }
@@ -118,8 +119,12 @@ impl CameraController {
     }
 
     pub fn process_mouse(&mut self, delta: (f64, f64)) {
-        self.delta_pitch = -delta.1 as f32;
-        self.delta_yaw = -delta.0 as f32;
+        // Need to filter out updates where the mouse didn't move because some web browsers will
+        // send a "blank" mouse update (at least in terms of delta) for each normal update.
+        if delta.0 != 0.0 || delta.1 != 0.0 {
+            self.delta_pitch = -delta.1 as f32;
+            self.delta_yaw = -delta.0 as f32;
+        }
     }
 
     pub fn update_camera(&mut self, camera: &mut Camera, dt: Duration) {
@@ -147,8 +152,8 @@ impl CameraController {
             camera.position -= view_right * self.speed * dt;
         }
 
-        camera.pitch += Rad(self.delta_pitch) * self.sensitivity;
-        camera.yaw += Rad(self.delta_yaw) * self.sensitivity;
+        camera.pitch += Rad(self.delta_pitch * self.sensitivity);
+        camera.yaw += Rad(self.delta_yaw * self.sensitivity);
 
         self.delta_pitch = 0.0;
         self.delta_yaw = 0.0;

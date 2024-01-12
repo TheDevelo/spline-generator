@@ -9,10 +9,10 @@ use rfd::AsyncFileDialog;
 use std::future::Future;
 use std::pin::Pin;
 use winit::event::WindowEvent;
+use winit::window::Window;
 
 pub struct Gui {
     // egui variables
-    context: Context,
     state: State,
     renderer: Renderer,
 
@@ -38,14 +38,15 @@ impl std::fmt::Display for GuiMenu {
 
 impl Gui {
     pub fn new(render_state: &RenderState) -> Self {
-        let context = egui::Context::default();
-        let state = egui_winit::State::new(
+        let context = Context::default();
+        let state = State::new(
+            context,
             egui::viewport::ViewportId::ROOT,
             &render_state.window,
             Some(render_state.window.scale_factor() as f32),
             None
         );
-        let renderer = egui_wgpu::renderer::Renderer::new(
+        let renderer = Renderer::new(
             &render_state.device,
             render_state.config.format,
             None,
@@ -53,7 +54,6 @@ impl Gui {
         );
 
         Gui {
-            context,
             state,
             renderer,
 
@@ -62,8 +62,8 @@ impl Gui {
         }
     }
 
-    pub fn input(&mut self, event: &WindowEvent) -> EventResponse {
-        self.state.on_window_event(&self.context, event)
+    pub fn input(&mut self, window: &Window, event: &WindowEvent) -> EventResponse {
+        self.state.on_window_event(window, event)
     }
 
     pub fn update(&mut self, render_state: &RenderState, world: &mut World) {
@@ -95,7 +95,7 @@ impl Gui {
         raw_input.time = Some(total_time);
 
         // Render our egui layout
-        let full_ouptut = self.context.run(raw_input, |ctx| {
+        let full_ouptut = self.state.egui_ctx().run(raw_input, |ctx| {
             let height_pts = render_state.size.height as f32 / ctx.pixels_per_point();
 
             egui::Window::new("Path Controls")
@@ -144,10 +144,10 @@ impl Gui {
         });
 
         // Handle platform functions such as clipboard
-        self.state.handle_platform_output(&render_state.window, &self.context, full_ouptut.platform_output);
+        self.state.handle_platform_output(&render_state.window, full_ouptut.platform_output);
 
         // Prepare egui output for rendering to wgpu
-        let tris = self.context.tessellate(full_ouptut.shapes, full_ouptut.pixels_per_point);
+        let tris = self.state.egui_ctx().tessellate(full_ouptut.shapes, full_ouptut.pixels_per_point);
         for (id, image_delta) in &full_ouptut.textures_delta.set {
             self.renderer.update_texture(&render_state.device, &render_state.queue, *id, &image_delta);
         }

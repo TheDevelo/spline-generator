@@ -2,10 +2,11 @@ mod gui;
 mod texture;
 mod world;
 
-use instant::Duration;
+use web_time::{Duration, Instant};
 use winit::{
     event::*,
-    event_loop::{ControlFlow, EventLoop},
+    event_loop::EventLoop,
+    keyboard::Key,
     window::{CursorGrabMode, WindowBuilder, Window},
 };
 #[cfg(target_arch="wasm32")]
@@ -33,7 +34,16 @@ struct RenderState {
 
 impl State {
     async fn new(window: Window) -> Self {
-        let size = window.inner_size();
+        let mut size = window.inner_size();
+        // Our window starts out with a size of 0x0 on WASM, so we need to give our window an actual
+        // size when we initialize. The actual size will be provided later by resize()
+        // 4x4 is the minimum possible size, so set either dimension to 4.
+        if size.width == 0 {
+            size.width = 4;
+        }
+        if size.height == 0 {
+            size.height = 4;
+        }
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -77,10 +87,12 @@ impl State {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: surface_caps.present_modes[0],
+            present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
+
+        // Wait to configure surface
         surface.configure(&device, &config);
 
         let render_state = RenderState {
@@ -126,7 +138,7 @@ impl State {
         // those events shouldn't happen during camera lock.
         let mut response = egui_winit::EventResponse { consumed: false, repaint: false };
         if !self.camera_lock {
-            response = self.gui.input(event);
+            response = self.gui.input(&self.render_state.window, event);
         }
         if response.repaint {
             self.render_state.window.request_redraw();
@@ -143,16 +155,16 @@ impl State {
         // Camera lock related events
         match event {
             WindowEvent::KeyboardInput {
-                input: KeyboardInput {
+                event: KeyEvent {
                     state,
-                    virtual_keycode: Some(keycode),
+                    logical_key,
                     ..
                 },
                 ..
             } => {
                 if *state == ElementState::Pressed {
-                    match keycode {
-                        VirtualKeyCode::Z => {
+                    match logical_key.as_ref() {
+                        Key::Character("z") | Key::Character("Z") => {
                             self.camera_lock = !self.camera_lock;
                             if self.camera_lock {
                                 // Lock and hide the mouse. Since winit (at least currently)
@@ -237,21 +249,17 @@ pub async fn run() {
         }
     }
 
-    let event_loop = EventLoop::new();
+    let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
 
     #[cfg(target_arch = "wasm32")]
     {
-        // Figure out how to do dynamic sizing with CSS later...
-        use winit::dpi::PhysicalSize;
-        window.set_min_inner_size(Some(PhysicalSize::new(450, 400)));
-
         use winit::platform::web::WindowExtWebSys;
         web_sys::window()
             .and_then(|win| win.document())
             .and_then(|doc| {
-                let dst = doc.get_element_by_id("wasm-example")?;
-                let canvas = web_sys::Element::from(window.canvas());
+                let dst = doc.get_element_by_id("wgpu-target")?;
+                let canvas = web_sys::Element::from(window.canvas().unwrap());
                 dst.append_child(&canvas).ok()?;
                 Some(())
             })
@@ -259,33 +267,37 @@ pub async fn run() {
     }
 
     let mut state = State::new(window).await;
-    let mut total_time = instant::Duration::ZERO;
-    let mut last_render_time = instant::Instant::now();
+    let mut total_time = Duration::ZERO;
+    let mut last_render_time = Instant::now();
 
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run(move |event, elwt| {
         match event {
             Event::WindowEvent {
                 ref event,
                 window_id,
             } if window_id == state.window().id() => if !state.input(event) {
                 match event {
-                    WindowEvent::CloseRequested
-                    | WindowEvent::KeyboardInput {
-                        input:
-                            KeyboardInput {
-                                state: ElementState::Pressed,
-                                virtual_keycode: Some(VirtualKeyCode::Escape),
-                                ..
-                            },
-                        ..
-                    } => {
-                        *control_flow = ControlFlow::Exit;
-                    },
+                    WindowEvent::CloseRequested => elwt.exit(),
                     WindowEvent::Resized(physical_size) => {
                         state.resize(*physical_size);
                     },
-                    WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                        state.resize(**new_inner_size);
+                    WindowEvent::RedrawRequested => {
+                        let now = Instant::now();
+                        let dt = now - last_render_time;
+                        total_time += dt;
+                        last_render_time = now;
+                        state.update(dt);
+
+                        match state.render(total_time) {
+                            Ok(_) => {}
+                            // Reconfigure the surface if lost
+                            Err(wgpu::SurfaceError::Lost) => state.resize(state.render_state.size),
+                            // The system is out of memory, we should probably quit
+                            Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
+                            // All other errors (Outdated, Timeout) should be resolved by the next frame
+                            Err(e) => eprintln!("{:?}", e),
+                        }
+
                     },
                     _ => {}
                 }
@@ -293,30 +305,15 @@ pub async fn run() {
             Event::DeviceEvent {
                 event: DeviceEvent::MouseMotion { delta },
                 ..
-            } => state.input_mouse_delta(delta),
-            Event::RedrawRequested(window_id) if window_id == state.window().id() => {
-                let now = instant::Instant::now();
-                let dt = now - last_render_time;
-                total_time += dt;
-                last_render_time = now;
-                state.update(dt);
-
-                match state.render(total_time) {
-                    Ok(_) => {}
-                    // Reconfigure the surface if lost
-                    Err(wgpu::SurfaceError::Lost) => state.resize(state.render_state.size),
-                    // The system is out of memory, we should probably quit
-                    Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-                    // All other errors (Outdated, Timeout) should be resolved by the next frame
-                    Err(e) => eprintln!("{:?}", e),
-                }
-            }
-            Event::MainEventsCleared => {
-                // RedrawRequested will only trigger once unless we manually
-                // request it.
+            } => {
+                state.input_mouse_delta(delta);
+                state.window().request_redraw();
+            },
+            Event::AboutToWait => {
+                // RedrawRequested will only trigger once unless we manually request it.
                 state.window().request_redraw();
             }
             _ => {}
         }
-    });
+    }).unwrap();
 }

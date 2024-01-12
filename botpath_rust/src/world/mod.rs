@@ -5,7 +5,7 @@ use crate::texture;
 use crate::RenderState;
 use crate::Vertex;
 
-use instant::Duration;
+use web_time::Duration;
 use winit::event::*;
 use wgpu::util::DeviceExt;
 
