@@ -1,3 +1,6 @@
+use crate::RenderState;
+use crate::world::{map, World};
+
 use egui::Context;
 use egui_winit::{EventResponse, State};
 use egui_wgpu::renderer::{Renderer, ScreenDescriptor};
@@ -6,7 +9,6 @@ use rfd::AsyncFileDialog;
 use std::future::Future;
 use std::pin::Pin;
 use winit::event::WindowEvent;
-use winit::window::Window;
 
 pub struct Gui {
     // egui variables
@@ -25,10 +27,6 @@ enum GuiMenu {
     Map,
 }
 
-pub struct GuiUpdates {
-    pub map_vmf: Option<String>,
-}
-
 impl std::fmt::Display for GuiMenu {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match *self {
@@ -39,17 +37,17 @@ impl std::fmt::Display for GuiMenu {
 }
 
 impl Gui {
-    pub fn new(window: &Window, device: &wgpu::Device, texture_format: wgpu::TextureFormat) -> Self {
+    pub fn new(render_state: &RenderState) -> Self {
         let context = egui::Context::default();
         let state = egui_winit::State::new(
             egui::viewport::ViewportId::ROOT,
-            window,
-            Some(window.scale_factor() as f32),
+            &render_state.window,
+            Some(render_state.window.scale_factor() as f32),
             None
         );
         let renderer = egui_wgpu::renderer::Renderer::new(
-            device,
-            texture_format,
+            &render_state.device,
+            render_state.config.format,
             None,
             1
         );
@@ -68,11 +66,7 @@ impl Gui {
         self.state.on_window_event(&self.context, event)
     }
 
-    pub fn update(&mut self) -> GuiUpdates {
-        let mut updates = GuiUpdates {
-            map_vmf: None,
-        };
-
+    pub fn update(&mut self, render_state: &RenderState, world: &mut World) {
         if let Some(vmf_future) = &mut self.vmf_future {
             // Poll our vmf_future until it is finished loading. This is probably a stupid way to
             // do this, but it would take way more effort to properly do an async setup :)
@@ -80,34 +74,27 @@ impl Gui {
             let mut ctx = std::task::Context::from_waker(&waker);
             let poll_result = vmf_future.as_mut().poll(&mut ctx);
             if let std::task::Poll::Ready(vmf) = poll_result {
-                updates.map_vmf = Some(vmf);
+                // vmf_future is ready, so update map
+                world.map = map::Map::from_string(&vmf, &render_state.device).unwrap();
                 self.vmf_future = None;
             }
         }
-
-        return updates;
     }
 
-    pub fn render(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        window: &Window,
-        total_time: f64,
-        screen_desc: ScreenDescriptor
-    ) {
-        let screen_width = screen_desc.size_in_pixels[0] as f32;
-        let screen_height = screen_desc.size_in_pixels[1] as f32;
+    pub fn render(&mut self, render_state: &RenderState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, total_time: f64) {
+        let screen_desc = ScreenDescriptor {
+            size_in_pixels: render_state.size.into(),
+            pixels_per_point: render_state.window.scale_factor() as f32,
+        };
 
         // Accumulate input handled by egui
-        let mut raw_input = self.state.take_egui_input(window);
+        let mut raw_input = self.state.take_egui_input(&render_state.window);
         raw_input.time = Some(total_time);
 
         // Render our egui layout
         let full_ouptut = self.context.run(raw_input, |ctx| {
-            let height_pts = screen_height / ctx.pixels_per_point();
+            let height_pts = render_state.size.height as f32 / ctx.pixels_per_point();
+
             egui::Window::new("Path Controls")
                 .anchor(egui::Align2::RIGHT_TOP, (-10.0, 10.0))
                 .fixed_size((300.0, height_pts - 55.0))
@@ -149,14 +136,14 @@ impl Gui {
         });
 
         // Handle platform functions such as clipboard
-        self.state.handle_platform_output(window, &self.context, full_ouptut.platform_output);
+        self.state.handle_platform_output(&render_state.window, &self.context, full_ouptut.platform_output);
 
         // Prepare egui output for rendering to wgpu
         let tris = self.context.tessellate(full_ouptut.shapes, full_ouptut.pixels_per_point);
         for (id, image_delta) in &full_ouptut.textures_delta.set {
-            self.renderer.update_texture(device, queue, *id, &image_delta);
+            self.renderer.update_texture(&render_state.device, &render_state.queue, *id, &image_delta);
         }
-        self.renderer.update_buffers(device, queue, encoder, &tris, &screen_desc);
+        self.renderer.update_buffers(&render_state.device, &render_state.queue, encoder, &tris, &screen_desc);
 
         // Draw egui to our output view
         {
