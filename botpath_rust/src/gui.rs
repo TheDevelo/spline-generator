@@ -19,6 +19,7 @@ pub struct Gui {
     // gui state
     menu_selection: GuiMenu,
     vmf_future: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
+    avg_frame_time: f64,
 }
 
 #[derive(Eq, PartialEq)]
@@ -59,6 +60,7 @@ impl Gui {
 
             menu_selection: GuiMenu::Controls,
             vmf_future: None,
+            avg_frame_time: 1.0 / 60.0, // 60 FPS is a reasonable starting assumption
         }
     }
 
@@ -84,11 +86,10 @@ impl Gui {
         }
     }
 
-    pub fn render(&mut self, render_state: &RenderState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, total_time: f64) {
-        let screen_desc = ScreenDescriptor {
-            size_in_pixels: render_state.size.into(),
-            pixels_per_point: render_state.window.scale_factor() as f32,
-        };
+    pub fn render(&mut self, render_state: &RenderState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, dt: f64, total_time: f64) {
+        // Update our FPS average. In order to get a rolling average without storing the frame
+        // times for the past X frames, we compute it using a geometric series sum.
+        self.avg_frame_time = 15.0 * self.avg_frame_time / 16.0 + dt / 16.0;
 
         // Accumulate input handled by egui
         let mut raw_input = self.state.take_egui_input(&render_state.window);
@@ -104,6 +105,7 @@ impl Gui {
                 .show(&ctx, |ui| {
                     ui.set_width(ui.available_width());
                     ui.set_height(ui.available_height());
+                    ui.add_space(8.0);
                     // Menu selector
                     egui::ComboBox::from_id_source("Menu Selector")
                         .selected_text(format!("{}", self.menu_selection))
@@ -122,7 +124,7 @@ impl Gui {
                             ui.label("Mouse: Aim the camera");
                         },
                         GuiMenu::Map => {
-                            if ui.button("Load VMF").clicked() {
+                            if ui.button("Load VMF").clicked() && self.vmf_future.is_none() {
                                 // Spawn a file picker. We'll get the result of the file picker
                                 // later in update()
                                 self.vmf_future = Some(Box::pin(async {
@@ -141,12 +143,27 @@ impl Gui {
                         },
                     }
                 });
+
+            egui::Window::new("FPS Counter")
+                .anchor(egui::Align2::LEFT_TOP, (10.0, 10.0))
+                .resizable(false)
+                .title_bar(false)
+                .frame(egui::Frame {
+                    fill: egui::Color32::TRANSPARENT,
+                    ..Default::default()
+                }).show(&ctx, |ui| {
+                    ui.colored_label(egui::Color32::BLACK, format!("{:.1} FPS", 1.0 / self.avg_frame_time));
+                });
         });
 
         // Handle platform functions such as clipboard
         self.state.handle_platform_output(&render_state.window, full_ouptut.platform_output);
 
         // Prepare egui output for rendering to wgpu
+        let screen_desc = ScreenDescriptor {
+            size_in_pixels: render_state.size.into(),
+            pixels_per_point: render_state.window.scale_factor() as f32,
+        };
         let tris = self.state.egui_ctx().tessellate(full_ouptut.shapes, full_ouptut.pixels_per_point);
         for (id, image_delta) in &full_ouptut.textures_delta.set {
             self.renderer.update_texture(&render_state.device, &render_state.queue, *id, &image_delta);

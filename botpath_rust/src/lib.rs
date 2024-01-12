@@ -217,7 +217,7 @@ impl State {
         self.gui.update(&self.render_state, &mut self.world);
     }
 
-    fn render(&mut self, total_time: Duration) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, dt: Duration, total_time: Duration) -> Result<(), wgpu::SurfaceError> {
         let output = self.render_state.surface.get_current_texture()?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.render_state.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -228,7 +228,7 @@ impl State {
         self.world.render(&self.render_state, &mut encoder, &view);
 
         // egui Render Pass
-        self.gui.render(&self.render_state, &mut encoder, &view, total_time.as_secs_f64());
+        self.gui.render(&self.render_state, &mut encoder, &view, dt.as_secs_f64(), total_time.as_secs_f64());
 
         // submit will accept anything that implements IntoIter
         self.render_state.queue.submit(std::iter::once(encoder.finish()));
@@ -288,7 +288,7 @@ pub async fn run() {
                         last_render_time = now;
                         state.update(dt);
 
-                        match state.render(total_time) {
+                        match state.render(dt, total_time) {
                             Ok(_) => {}
                             // Reconfigure the surface if lost
                             Err(wgpu::SurfaceError::Lost) => state.resize(state.render_state.size),
