@@ -1,4 +1,5 @@
 mod camera;
+pub mod spline;
 pub mod map;
 
 use crate::texture;
@@ -12,6 +13,7 @@ use wgpu::util::DeviceExt;
 // We make some fields pub so that the GUI can inspect/modify them
 pub struct World {
     render_pipeline: wgpu::RenderPipeline,
+    spline_render_pipeline: wgpu::RenderPipeline,
     wall_texture_bind_group: wgpu::BindGroup,
     camera: camera::Camera,
     camera_uniform: camera::CameraUniform,
@@ -20,6 +22,7 @@ pub struct World {
     camera_controller: camera::CameraController,
     depth_texture: texture::Texture,
     pub map: map::Map,
+    pub spline: spline::Spline,
 }
 
 impl World {
@@ -165,12 +168,68 @@ impl World {
             multiview: None,
         });
 
+        let spline_shader = render_state.device.create_shader_module(wgpu::include_wgsl!("spline_shader.wgsl"));
+
+        let spline_render_pipeline_layout = render_state.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Spline Render Pipeline Layout"),
+            bind_group_layouts: &[
+                &camera_bind_group_layout,
+            ],
+            push_constant_ranges: &[],
+        });
+
+        let spline_render_pipeline = render_state.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Spline Render Pipeline"),
+            layout: Some(&spline_render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &spline_shader,
+                entry_point: "vs_main",
+                buffers: &[
+                    spline::SplineVertex::desc(),
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &spline_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: render_state.config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineStrip,
+                strip_index_format: Some(wgpu::IndexFormat::Uint32),
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: texture::Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
+
         let map = map::Map::empty(&render_state.device);
+        let spline = spline::Spline::new(&render_state.device);
 
         let camera_controller = camera::CameraController::new(2500.0, std::f32::consts::PI / 1000.0);
 
         Self {
             render_pipeline,
+            spline_render_pipeline,
             wall_texture_bind_group,
             camera,
             camera_uniform,
@@ -178,6 +237,7 @@ impl World {
             camera_bind_group,
             camera_controller,
             map,
+            spline,
             depth_texture,
         }
     }
@@ -193,6 +253,11 @@ impl World {
             return true;
         }
 
+        // Spline control events
+        if self.spline.process_events(event, &self.camera) {
+            return true;
+        }
+
         return false;
     }
 
@@ -204,6 +269,8 @@ impl World {
         self.camera_controller.update_camera(&mut self.camera, dt);
         self.camera_uniform.update_view_proj(&self.camera);
         render_state.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
+
+        self.spline.update(render_state);
     }
 
     pub fn render(&self, _render_state: &RenderState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
@@ -238,5 +305,9 @@ impl World {
         render_pass.set_bind_group(0, &self.wall_texture_bind_group, &[]);
         render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
         self.map.draw(&mut render_pass);
+
+        render_pass.set_pipeline(&self.spline_render_pipeline);
+        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        self.spline.draw(&mut render_pass);
     }
 }
