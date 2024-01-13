@@ -122,6 +122,7 @@ impl Gui {
                             ui.label("WASD: Move around");
                             ui.label("Z: Toggle mouse capture, allowing camera control");
                             ui.label("Mouse: Aim the camera");
+                            ui.label("Space: Insert a new point into the current spline");
                         },
                         GuiMenu::Map => {
                             if ui.button("Load VMF").clicked() && self.vmf_future.is_none() {

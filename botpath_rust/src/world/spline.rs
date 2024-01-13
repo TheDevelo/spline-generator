@@ -1,4 +1,6 @@
+use crate::texture;
 use crate::RenderState;
+use crate::Vertex;
 use crate::world::camera::Camera;
 
 use cgmath::{Point3, Rad, Vector3, EuclideanSpace};
@@ -142,12 +144,6 @@ impl Spline {
             self.reconstruct_mesh = false;
         }
     }
-
-    pub fn draw<'s>(&'s self, render_pass: &mut wgpu::RenderPass<'s>) {
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.draw_indexed(0..self.index_count, 0, 0..1);
-    }
 }
 
 pub struct SplineControlPoint {
@@ -174,5 +170,83 @@ impl SplineControlPoint {
         let t2 = t*t;
         let t3 = t*t2;
         Point3::from_vec((2.0*t3 - 3.0*t2 + 1.0) * pos_s + (t3 - 2.0*t2 + t) * tangent_s + (-2.0*t3 + 3.0*t2) * pos_o + (t3 - t2) * tangent_o)
+    }
+}
+
+// Struct that handles the rendering of spline instances. Separate from Spline so that we can
+// freely draw multiple Splines without maintaining separate copies of our rendering state
+pub struct SplineRenderer {
+    render_pipeline: wgpu::RenderPipeline,
+}
+
+impl SplineRenderer {
+    pub fn new(render_state: &RenderState, camera_layout: &wgpu::BindGroupLayout) -> Self {
+        let shader = render_state.device.create_shader_module(wgpu::include_wgsl!("spline_shader.wgsl"));
+
+        let render_pipeline_layout = render_state.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Spline Render Pipeline Layout"),
+            bind_group_layouts: &[
+                camera_layout,
+            ],
+            push_constant_ranges: &[],
+        });
+
+        let render_pipeline = render_state.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Spline Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[
+                    SplineVertex::desc(),
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: render_state.config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineStrip,
+                strip_index_format: Some(wgpu::IndexFormat::Uint32),
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: texture::Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
+        SplineRenderer {
+            render_pipeline,
+        }
+    }
+
+    pub fn draw<'s>(&'s self, render_pass: &mut wgpu::RenderPass<'s>, camera_bind_group: &'s wgpu::BindGroup, spline: &'s Spline) {
+        render_pass.set_pipeline(&self.render_pipeline);
+
+        render_pass.set_bind_group(0, camera_bind_group, &[]);
+
+        render_pass.set_vertex_buffer(0, spline.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(spline.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+        render_pass.draw_indexed(0..spline.index_count, 0, 0..1);
     }
 }

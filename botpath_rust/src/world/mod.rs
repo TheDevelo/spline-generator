@@ -4,7 +4,6 @@ pub mod map;
 
 use crate::texture;
 use crate::RenderState;
-use crate::Vertex;
 
 use web_time::Duration;
 use winit::event::*;
@@ -12,61 +11,21 @@ use wgpu::util::DeviceExt;
 
 // We make some fields pub so that the GUI can inspect/modify them
 pub struct World {
-    render_pipeline: wgpu::RenderPipeline,
-    spline_render_pipeline: wgpu::RenderPipeline,
-    wall_texture_bind_group: wgpu::BindGroup,
+    depth_texture: texture::Texture,
     camera: camera::Camera,
     camera_uniform: camera::CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_controller: camera::CameraController,
-    depth_texture: texture::Texture,
     pub map: map::Map,
+    map_renderer: map::MapRenderer,
     pub spline: spline::Spline,
+    spline_renderer: spline::SplineRenderer,
 }
 
 impl World {
     pub fn new(render_state: &RenderState) -> Self {
-        let wall_texture_bytes = include_bytes!("wall_texture.png");
-        let wall_texture = texture::Texture::from_bytes(&render_state.device, &render_state.queue, wall_texture_bytes, "wall_texture").unwrap();
-
-        let texture_bind_group_layout = render_state.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-            label: Some("texture_bind_group_layout"),
-        });
-        let wall_texture_bind_group = render_state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&wall_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&wall_texture.sampler),
-                },
-            ],
-            label: Some("wall_texture_bind_group"),
-        });
-
-        let shader = render_state.device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+        let depth_texture = texture::Texture::create_depth_texture(&render_state.device, &render_state.config, "depth_texture");
 
         let camera = camera::Camera {
             position: (0.0, 0.0, 0.0).into(),
@@ -114,131 +73,24 @@ impl World {
             label: Some("camera_bind_group"),
         });
 
-        let depth_texture = texture::Texture::create_depth_texture(&render_state.device, &render_state.config, "depth_texture");
-
-        let render_pipeline_layout = render_state.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[
-                &texture_bind_group_layout,
-                &camera_bind_group_layout,
-            ],
-            push_constant_ranges: &[],
-        });
-
-        let render_pipeline = render_state.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: &[
-                    map::MapVertex::desc(),
-                ],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: render_state.config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: texture::Texture::DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-        });
-
-        let spline_shader = render_state.device.create_shader_module(wgpu::include_wgsl!("spline_shader.wgsl"));
-
-        let spline_render_pipeline_layout = render_state.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Spline Render Pipeline Layout"),
-            bind_group_layouts: &[
-                &camera_bind_group_layout,
-            ],
-            push_constant_ranges: &[],
-        });
-
-        let spline_render_pipeline = render_state.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Spline Render Pipeline"),
-            layout: Some(&spline_render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &spline_shader,
-                entry_point: "vs_main",
-                buffers: &[
-                    spline::SplineVertex::desc(),
-                ],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &spline_shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: render_state.config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineStrip,
-                strip_index_format: Some(wgpu::IndexFormat::Uint32),
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: texture::Texture::DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-        });
-
-
-        let map = map::Map::empty(&render_state.device);
-        let spline = spline::Spline::new(&render_state.device);
-
         let camera_controller = camera::CameraController::new(2500.0, std::f32::consts::PI / 1000.0);
 
+        let map = map::Map::empty(&render_state.device);
+        let map_renderer = map::MapRenderer::new(render_state, &camera_bind_group_layout);
+        let spline = spline::Spline::new(&render_state.device);
+        let spline_renderer = spline::SplineRenderer::new(render_state, &camera_bind_group_layout);
+
         Self {
-            render_pipeline,
-            spline_render_pipeline,
-            wall_texture_bind_group,
+            depth_texture,
             camera,
             camera_uniform,
             camera_buffer,
             camera_bind_group,
             camera_controller,
             map,
+            map_renderer,
             spline,
-            depth_texture,
+            spline_renderer,
         }
     }
 
@@ -301,13 +153,7 @@ impl World {
             timestamp_writes: None,
         });
 
-        render_pass.set_pipeline(&self.render_pipeline);
-        render_pass.set_bind_group(0, &self.wall_texture_bind_group, &[]);
-        render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-        self.map.draw(&mut render_pass);
-
-        render_pass.set_pipeline(&self.spline_render_pipeline);
-        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        self.spline.draw(&mut render_pass);
+        self.map_renderer.draw(&mut render_pass, &self.camera_bind_group, &self.map);
+        self.spline_renderer.draw(&mut render_pass, &self.camera_bind_group, &self.spline);
     }
 }

@@ -1,3 +1,7 @@
+use crate::texture;
+use crate::RenderState;
+use crate::Vertex;
+
 use anyhow::*;
 use cgmath::{Vector2, Vector3};
 use cgmath::prelude::*;
@@ -143,12 +147,6 @@ impl Map {
             index_count: 0,
         }
     }
-
-    pub fn draw<'s>(&'s self, render_pass: &mut wgpu::RenderPass<'s>) {
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.draw_indexed(0..self.index_count, 0, 0..1);
-    }
 }
 
 const TEXTURE_SCALE: f32 = 256.0;
@@ -188,6 +186,127 @@ fn is_side_visible(side: &&VMFEntry) -> bool {
         && material != "TOOLS/TOOLSTRIGGER"
         && material != "TOOLS/TOOLSHINT"
         && material != "TOOLS/TOOLSSKIP"
+}
+
+// Struct that handles the rendering of map instances. Separate from Map so that we can freely swap
+// out our Map instance without rebuilding / migrating our rendering state
+pub struct MapRenderer {
+    wall_texture_bind_group: wgpu::BindGroup,
+    render_pipeline: wgpu::RenderPipeline,
+}
+
+impl MapRenderer {
+    pub fn new(render_state: &RenderState, camera_layout: &wgpu::BindGroupLayout) -> Self {
+        let wall_texture_bytes = include_bytes!("wall_texture.png");
+        let wall_texture = texture::Texture::from_bytes(&render_state.device, &render_state.queue, wall_texture_bytes, "wall_texture").unwrap();
+
+        let texture_bind_group_layout = render_state.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+            label: Some("texture_bind_group_layout"),
+        });
+        let wall_texture_bind_group = render_state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&wall_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&wall_texture.sampler),
+                },
+            ],
+            label: Some("wall_texture_bind_group"),
+        });
+
+        let shader = render_state.device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+
+        let render_pipeline_layout = render_state.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[
+                &texture_bind_group_layout,
+                camera_layout,
+            ],
+            push_constant_ranges: &[],
+        });
+
+        let render_pipeline = render_state.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[
+                    MapVertex::desc(),
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: render_state.config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: texture::Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
+        MapRenderer {
+            wall_texture_bind_group,
+            render_pipeline,
+        }
+    }
+
+    pub fn draw<'s>(&'s self, render_pass: &mut wgpu::RenderPass<'s>, camera_bind_group: &'s wgpu::BindGroup, map: &'s Map) {
+        render_pass.set_pipeline(&self.render_pipeline);
+
+        render_pass.set_bind_group(0, &self.wall_texture_bind_group, &[]);
+        render_pass.set_bind_group(1, camera_bind_group, &[]);
+
+        render_pass.set_vertex_buffer(0, map.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(map.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+        render_pass.draw_indexed(0..map.index_count, 0, 0..1);
+    }
 }
 
 // VMF types to parse the VMF file into a traversible structure
