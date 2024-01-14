@@ -3,7 +3,8 @@ use crate::RenderState;
 use crate::Vertex;
 use crate::world::camera::Camera;
 
-use cgmath::{Point3, Rad, Vector3, EuclideanSpace};
+use cgmath::prelude::*;
+use cgmath::{Point3, Rad, Vector3};
 use winit::event::*;
 use winit::keyboard::{Key, NamedKey};
 use wgpu::util::DeviceExt;
@@ -35,6 +36,8 @@ impl crate::Vertex for SplineVertex {
 pub struct Spline {
     // Spline data
     pub points: Vec<SplineControlPoint>,
+    pub radius: f32,
+    pub sides: u32,
     pub selected_point: u32,
 
     // Representative mesh
@@ -83,6 +86,8 @@ impl Spline {
 
         Spline {
             points: Vec::new(),
+            radius: 4.0,
+            sides: 3,
             selected_point: 0,
 
             reconstruct_mesh: false,
@@ -153,22 +158,110 @@ impl Spline {
 
     pub fn update(&mut self, render_state: &RenderState) {
         if self.reconstruct_mesh {
-            // Start by calculating the positions of all our subdivisions on the spline.
+            // Start by calculating the positions and tangents of our subdivisions on the spline.
             let mut subdiv_points = Vec::new();
+            let mut subdiv_tangents = Vec::new();
             for i in 0..(self.points.len() - 1) {
                 for s in 0..SPLINE_SUBDIV {
                     subdiv_points.push(self.points[i].interpolate(&self.points[i + 1], SPLINE_SUBDIV_T * s as f32));
+
+                    let tangent = self.points[i].interp_tangent_dir(&self.points[i + 1], SPLINE_SUBDIV_T * s as f32);
+                    subdiv_tangents.push(tangent);
                 }
             }
             subdiv_points.push(self.points[self.points.len() - 1].position);
+            subdiv_tangents.push(self.points[self.points.len() - 1].calculate_tangent().normalize());
 
-            // Build a mesh for the GPU
-            let vertices = subdiv_points.iter().enumerate().map(|(i, p)| SplineVertex {
-                position: (*p).into(),
-                t_value: i as f32 * SPLINE_SUBDIV_T,
-            }).collect::<Vec<SplineVertex>>();
-            let indices: Vec<u32> = (0..vertices.len() as u32).collect();
+            // Calculate the normals and binormals from the tangents of each subdivision.
+            // Since we have an entire circle of possible normals, I'll make the following desired restrictions:
+            // - 1. All our normals should lie in the XY plane
+            // - 2. The initial normal should be such that tan x norm points up.
+            // - 3. The function of normals should be continuous except at single points where the
+            //      tangent points straight up/down (not contiguous regions)
+            let mut subdiv_normals = Vec::new();
+            let mut subdiv_binormals = Vec::new();
+            let mut last_normal = Vector3::unit_z().cross(self.points[0].calculate_tangent()).normalize();
+            for tangent in subdiv_tangents.iter() {
+                let normal;
+                if *tangent == Vector3::unit_z() || *tangent == -Vector3::unit_z() {
+                    // In the case that our tangent points straight up or down, then we just
+                    // keep the last normal; any XY unit vector will be a valid normal.
+                    normal = last_normal;
+                }
+                else {
+                    // When the tangent isn't straight up or down, then by restriction 1, we
+                    // only have 2 choices of normal. So pick the one that makes a smaller
+                    // angle with our last normal. This should give the normal that agrees with
+                    // the underlying continuous function, since our spline is "reasonably smooth".
+                    // Our two options are actually negatives of each other, so the dot product
+                    // to the last normal will be negatives of each other. Larger dot product
+                    // means a smaller angle, so pick which one has a positive dot product.
+                    let up_normal = Vector3::unit_z().cross(*tangent).normalize();
+                    if up_normal.dot(last_normal) >= 0.0 {
+                        normal = up_normal;
+                    }
+                    else {
+                        normal = -up_normal;
+                    }
+                }
+                last_normal = normal;
+                subdiv_normals.push(normal);
 
+                subdiv_binormals.push(tangent.cross(normal));
+            }
+
+            // Calculate the polygon positions for our spline mesh. These positions will lie on the
+            // normal plane, and thus can be turned into offsets with the normal and binormal.
+            let mut poly_positions = Vec::new();
+            for i in 0..self.sides {
+                let angle = i as f32 / self.sides as f32 * std::f32::consts::TAU;
+                poly_positions.push(angle.sin_cos());
+            }
+
+            // Construct the vertices for our mesh
+            let mut vertices = Vec::new();
+            for i in 0..subdiv_points.len() {
+                for poly_pos in poly_positions.iter() {
+                    let position = subdiv_points[i] + (poly_pos.0 * subdiv_normals[i] + poly_pos.1 * subdiv_binormals[i]) * self.radius;
+                    vertices.push(SplineVertex {
+                        position: position.into(),
+                        t_value: i as f32 * SPLINE_SUBDIV_T,
+                    });
+                }
+            }
+
+            // Construct our indices to form the mesh
+            let mut indices: Vec<u32> = Vec::new();
+            // End-cap for our first subdivision
+            for i in 1..(self.sides - 1) {
+                indices.push(0);
+                indices.push(i);
+                indices.push(i + 1);
+            }
+            // Triangles between subdivisions
+            for subdiv in 0..(subdiv_points.len() - 1) {
+                let base_i = subdiv as u32 * self.sides;
+                let next_base_i = (subdiv as u32 + 1) * self.sides;
+                for i in 0..self.sides {
+                    let next_i = (i + 1) % self.sides;
+                    indices.push(base_i + next_i);
+                    indices.push(base_i + i);
+                    indices.push(next_base_i + next_i);
+
+                    indices.push(base_i + i);
+                    indices.push(next_base_i + i);
+                    indices.push(next_base_i + next_i);
+                }
+            }
+            // End-cap for our last subdivision
+            let end_base_i = (subdiv_points.len() as u32 - 1) * self.sides;
+            for i in 1..(self.sides - 1) {
+                indices.push(end_base_i);
+                indices.push(end_base_i + i);
+                indices.push(end_base_i + i + 1);
+            }
+
+            // Build our mesh buffers for the GPU
             let vertex_buffer = render_state.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Spline Vertex Buffer"),
                 contents: bytemuck::cast_slice(&vertices),
@@ -216,6 +309,17 @@ impl SplineControlPoint {
         let t2 = t*t;
         let t3 = t*t2;
         Point3::from_vec((2.0*t3 - 3.0*t2 + 1.0) * pos_s + (t3 - 2.0*t2 + t) * tangent_s + (-2.0*t3 + 3.0*t2) * pos_o + (t3 - t2) * tangent_o)
+    }
+
+    // Used to calculate tangent for inbetween points
+    fn interp_tangent_dir(&self, other: &SplineControlPoint, t: f32) -> Vector3<f32> {
+        let tangent_s = self.calculate_tangent();
+        let tangent_o = other.calculate_tangent();
+        let pos_s = self.position.to_vec();
+        let pos_o = other.position.to_vec();
+        // Tangent can be calculated as the derivative of our above formula w.r.t t.
+        let t2 = t*t;
+        ((6.0*t2 - 6.0*t) * (pos_s - pos_o) + (3.0*t2 - 4.0*t + 1.0) * tangent_s + (3.0*t2 - 2.0*t) * tangent_o).normalize()
     }
 }
 
@@ -275,8 +379,8 @@ impl SplineRenderer {
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineStrip,
-                strip_index_format: Some(wgpu::IndexFormat::Uint32),
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: None,
                 polygon_mode: wgpu::PolygonMode::Fill,
