@@ -15,11 +15,11 @@ const SPLINE_SUBDIV_T: f32 = 1.0 / SPLINE_SUBDIV as f32;
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SplineVertex {
     position: [f32; 3],
-    segment_num: u32,
+    t_value: f32,
 }
 
 impl SplineVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Uint32];
+    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32];
 }
 
 impl crate::Vertex for SplineVertex {
@@ -42,10 +42,12 @@ pub struct Spline {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
+    selected_point_buffer: wgpu::Buffer,
+    selected_point_bind_group: wgpu::BindGroup,
 }
 
 impl Spline {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, renderer: &SplineRenderer) -> Self {
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Spline Vertex Buffer"),
             size: 0,
@@ -59,6 +61,26 @@ impl Spline {
             mapped_at_creation: false,
         });
 
+        // Need to store this buffer/bind group per spline, since we can't write to a buffer
+        // mid-render pass. I think.
+        let selected_point_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Selected Point Buffer"),
+            contents: bytemuck::cast_slice(&[0.0 as f32]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let selected_point_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &renderer.selected_point_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: selected_point_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("selected_point_bind_group"),
+        });
+
+
         Spline {
             points: Vec::new(),
             selected_point: 0,
@@ -67,6 +89,8 @@ impl Spline {
             vertex_buffer,
             index_buffer,
             index_count: 0,
+            selected_point_buffer,
+            selected_point_bind_group,
         }
     }
 
@@ -90,16 +114,36 @@ impl Spline {
             } if *state == ElementState::Pressed && *repeat == false => {
                 match logical_key.as_ref() {
                     Key::Named(NamedKey::Space) => {
-                        // Append a new control point to the end of the spline at the camera
-                        self.points.push(SplineControlPoint {
+                        let new_point = SplineControlPoint {
                             position: camera.position,
                             pitch: camera.pitch,
                             yaw: camera.yaw,
                             tangent_magnitude: 1024.0,
-                        });
+                        };
+                        if self.selected_point == self.points.len() as u32 {
+                            // Append a new control point to the end of the spline at the camera
+                            self.points.push(new_point);
+                        }
+                        else {
+                            // Replace the point currently selected with our new point
+                            self.points[self.selected_point as usize] = new_point;
+                        }
+                        self.selected_point += 1;
                         self.request_rebuild();
                         true
-                    }
+                    },
+                    Key::Named(NamedKey::ArrowLeft) => {
+                        if self.selected_point != 0 {
+                            self.selected_point -= 1;
+                        }
+                        true
+                    },
+                    Key::Named(NamedKey::ArrowRight) => {
+                        if self.selected_point < self.points.len() as u32 {
+                            self.selected_point += 1;
+                        }
+                        true
+                    },
                     _ => false,
                 }
             }
@@ -121,7 +165,7 @@ impl Spline {
             // Build a mesh for the GPU
             let vertices = subdiv_points.iter().enumerate().map(|(i, p)| SplineVertex {
                 position: (*p).into(),
-                segment_num: i as u32,
+                t_value: i as f32 * SPLINE_SUBDIV_T,
             }).collect::<Vec<SplineVertex>>();
             let indices: Vec<u32> = (0..vertices.len() as u32).collect();
 
@@ -143,6 +187,8 @@ impl Spline {
             // Rebuild the vertex list
             self.reconstruct_mesh = false;
         }
+
+        render_state.queue.write_buffer(&self.selected_point_buffer, 0, bytemuck::cast_slice(&[self.selected_point as f32]));
     }
 }
 
@@ -177,16 +223,34 @@ impl SplineControlPoint {
 // freely draw multiple Splines without maintaining separate copies of our rendering state
 pub struct SplineRenderer {
     render_pipeline: wgpu::RenderPipeline,
+    selected_point_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl SplineRenderer {
     pub fn new(render_state: &RenderState, camera_layout: &wgpu::BindGroupLayout) -> Self {
         let shader = render_state.device.create_shader_module(wgpu::include_wgsl!("spline_shader.wgsl"));
 
+        let selected_point_bind_group_layout = render_state.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("selected_point_bind_group_layout"),
+        });
+
         let render_pipeline_layout = render_state.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Spline Render Pipeline Layout"),
             bind_group_layouts: &[
                 camera_layout,
+                &selected_point_bind_group_layout,
             ],
             push_constant_ranges: &[],
         });
@@ -236,6 +300,7 @@ impl SplineRenderer {
 
         SplineRenderer {
             render_pipeline,
+            selected_point_bind_group_layout,
         }
     }
 
@@ -243,6 +308,7 @@ impl SplineRenderer {
         render_pass.set_pipeline(&self.render_pipeline);
 
         render_pass.set_bind_group(0, camera_bind_group, &[]);
+        render_pass.set_bind_group(1, &spline.selected_point_bind_group, &[]);
 
         render_pass.set_vertex_buffer(0, spline.vertex_buffer.slice(..));
         render_pass.set_index_buffer(spline.index_buffer.slice(..), wgpu::IndexFormat::Uint32);

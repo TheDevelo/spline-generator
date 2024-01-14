@@ -17,10 +17,10 @@ pub struct World {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_controller: camera::CameraController,
-    pub map: map::Map,
     map_renderer: map::MapRenderer,
-    pub spline: spline::Spline,
+    pub map: map::Map,
     spline_renderer: spline::SplineRenderer,
+    pub spline: spline::Spline,
 }
 
 impl World {
@@ -75,10 +75,10 @@ impl World {
 
         let camera_controller = camera::CameraController::new(2500.0, std::f32::consts::PI / 1000.0);
 
-        let map = map::Map::empty(&render_state.device);
         let map_renderer = map::MapRenderer::new(render_state, &camera_bind_group_layout);
-        let spline = spline::Spline::new(&render_state.device);
+        let map = map::Map::empty(&render_state.device);
         let spline_renderer = spline::SplineRenderer::new(render_state, &camera_bind_group_layout);
+        let spline = spline::Spline::new(&render_state.device, &spline_renderer);
 
         Self {
             depth_texture,
@@ -87,10 +87,10 @@ impl World {
             camera_buffer,
             camera_bind_group,
             camera_controller,
-            map,
             map_renderer,
-            spline,
+            map,
             spline_renderer,
+            spline,
         }
     }
 
