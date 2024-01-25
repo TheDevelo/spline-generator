@@ -4,7 +4,7 @@ use crate::Vertex;
 use crate::world::camera::Camera;
 
 use cgmath::prelude::*;
-use cgmath::{Point3, Rad, Vector3};
+use cgmath::{Deg, Point3, Vector3};
 use winit::event::*;
 use winit::keyboard::{Key, NamedKey};
 use wgpu::util::DeviceExt;
@@ -120,9 +120,9 @@ impl Spline {
                 match logical_key.as_ref() {
                     Key::Named(NamedKey::Space) => {
                         let new_point = SplineControlPoint {
-                            position: camera.position,
-                            pitch: camera.pitch,
-                            yaw: camera.yaw,
+                            position: camera.position.map(|c| c.round()),
+                            pitch: camera.pitch.into(),
+                            yaw: camera.yaw.into(),
                             tangent_magnitude: 1024.0,
                         };
                         if self.selected_point == self.points.len() as u32 {
@@ -286,16 +286,16 @@ impl Spline {
 }
 
 pub struct SplineControlPoint {
-    position: Point3<f32>,
-    pitch: Rad<f32>,
-    yaw: Rad<f32>,
-    tangent_magnitude: f32,
+    pub position: Point3<f32>,
+    pub pitch: Deg<f32>,
+    pub yaw: Deg<f32>,
+    pub tangent_magnitude: f32,
 }
 
 impl SplineControlPoint {
     fn calculate_tangent(&self) -> Vector3<f32> {
-        let (sin_pitch, cos_pitch) = self.pitch.0.sin_cos();
-        let (sin_yaw, cos_yaw) = self.yaw.0.sin_cos();
+        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
         let tangent_dir = Vector3::new(cos_pitch * cos_yaw, cos_pitch * sin_yaw, sin_pitch);
         tangent_dir * self.tangent_magnitude
     }

@@ -1,3 +1,4 @@
+use cgmath::prelude::*;
 use cgmath::{Deg, Point3, Matrix4, Rad, Vector3};
 use std::f32::consts::FRAC_PI_2;
 use web_time::Duration;
@@ -14,7 +15,6 @@ pub struct CameraUniform {
 
 impl CameraUniform {
     pub fn new() -> Self {
-        use cgmath::SquareMatrix;
         Self {
             view_proj: cgmath::Matrix4::identity().into(),
         }
@@ -46,8 +46,8 @@ pub struct Camera {
 
 impl Camera {
     pub fn build_view_projection_matrix(&self) -> Matrix4<f32> {
-        let (sin_pitch, cos_pitch) = self.pitch.0.sin_cos();
-        let (sin_yaw, cos_yaw) = self.yaw.0.sin_cos();
+        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
         let view_dir = Vector3::new(cos_pitch * cos_yaw, cos_pitch * sin_yaw, sin_pitch);
 
         let view = Matrix4::look_to_rh(self.position, view_dir, Vector3::unit_z());
@@ -130,8 +130,8 @@ impl CameraController {
     pub fn update_camera(&mut self, camera: &mut Camera, dt: Duration) {
         let dt = dt.as_secs_f32();
 
-        let (sin_pitch, cos_pitch) = camera.pitch.0.sin_cos();
-        let (sin_yaw, cos_yaw) = camera.yaw.0.sin_cos();
+        let (sin_pitch, cos_pitch) = camera.pitch.sin_cos();
+        let (sin_yaw, cos_yaw) = camera.yaw.sin_cos();
         let view_dir = Vector3::new(cos_pitch * cos_yaw, cos_pitch * sin_yaw, sin_pitch);
 
         // For forwards/backwards, we translate in the direction of the camera

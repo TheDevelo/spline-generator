@@ -1,7 +1,7 @@
 use crate::RenderState;
-use crate::world::{map, World};
+use crate::world::{map, spline, World};
 
-use egui::Context;
+use egui::{Context, DragValue};
 use egui_winit::{EventResponse, State};
 use egui_wgpu::renderer::{Renderer, ScreenDescriptor};
 use noop_waker::noop_waker;
@@ -26,6 +26,7 @@ pub struct Gui {
 enum GuiMenu {
     Controls,
     Map,
+    Spline,
 }
 
 impl std::fmt::Display for GuiMenu {
@@ -33,6 +34,7 @@ impl std::fmt::Display for GuiMenu {
         match *self {
             GuiMenu::Controls => write!(f, "Controls"),
             GuiMenu::Map => write!(f, "Map"),
+            GuiMenu::Spline => write!(f, "Spline"),
         }
     }
 }
@@ -86,7 +88,7 @@ impl Gui {
         }
     }
 
-    pub fn render(&mut self, render_state: &RenderState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, dt: f64, total_time: f64) {
+    pub fn render(&mut self, render_state: &RenderState, world: &mut World, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, dt: f64, total_time: f64) {
         // Update our FPS average. In order to get a rolling average without storing the frame
         // times for the past X frames, we compute it using a geometric series sum.
         self.avg_frame_time = 15.0 * self.avg_frame_time / 16.0 + dt / 16.0;
@@ -113,6 +115,7 @@ impl Gui {
                             ui.set_width(ui.available_width());
                             ui.selectable_value(&mut self.menu_selection, GuiMenu::Controls, format!("{}", GuiMenu::Controls));
                             ui.selectable_value(&mut self.menu_selection, GuiMenu::Map, format!("{}", GuiMenu::Map));
+                            ui.selectable_value(&mut self.menu_selection, GuiMenu::Spline, format!("{}", GuiMenu::Spline));
                         });
                     ui.separator();
 
@@ -123,6 +126,7 @@ impl Gui {
                             ui.label("Z: Toggle mouse capture, allowing camera control");
                             ui.label("Mouse: Aim the camera");
                             ui.label("Space: Insert a new point into the current spline");
+                            ui.label("Left & Right Arrow Keys: Change the selected point on the current spline");
                         },
                         GuiMenu::Map => {
                             if ui.button("Load VMF").clicked() && self.vmf_future.is_none() {
@@ -142,6 +146,57 @@ impl Gui {
                                 }));
                             }
                         },
+                        GuiMenu::Spline => {
+                            let enabled = world.spline.selected_point < world.spline.points.len() as u32;
+                            // Default values to show in case we don't have a selected point and the UI is disabled
+                            let mut default_point = spline::SplineControlPoint {
+                                position: cgmath::Point3::new(0.0, 0.0, 0.0),
+                                pitch: cgmath::Deg(0.0),
+                                yaw: cgmath::Deg(0.0),
+                                tangent_magnitude: 0.0,
+                            };
+                            let point = world.spline.points.get_mut(world.spline.selected_point as usize).unwrap_or(&mut default_point);
+
+                            let mut rebuild_spline = false;
+                            ui.add_enabled_ui(enabled, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("X:");
+                                    if ui.add(DragValue::new(&mut point.position.x)).changed() {
+                                        rebuild_spline = true;
+                                    }
+                                    ui.label("Y:");
+                                    if ui.add(DragValue::new(&mut point.position.y)).changed() {
+                                        rebuild_spline = true;
+                                    }
+                                    ui.label("Z:");
+                                    if ui.add(DragValue::new(&mut point.position.z)).changed() {
+                                        rebuild_spline = true;
+                                    }
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Pitch:");
+                                    if ui.add(DragValue::new(&mut point.pitch.0)).changed() {
+                                        rebuild_spline = true;
+                                    }
+                                    ui.label("Yaw:");
+                                    if ui.add(DragValue::new(&mut point.yaw.0)).changed() {
+                                        rebuild_spline = true;
+                                    }
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Tangent Magnitude:");
+                                    if ui.add(DragValue::new(&mut point.tangent_magnitude)).changed() {
+                                        rebuild_spline = true;
+                                    }
+                                });
+                            });
+
+                            if rebuild_spline {
+                                world.spline.request_rebuild();
+                            }
+                        }
                     }
                 });
 
