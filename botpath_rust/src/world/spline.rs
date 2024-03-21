@@ -173,41 +173,25 @@ impl Spline {
             subdiv_tangents.push(self.points[self.points.len() - 1].calculate_tangent().normalize());
 
             // Calculate the normals and binormals from the tangents of each subdivision.
-            // Since we have an entire circle of possible normals, I'll make the following desired restrictions:
-            // - 1. All our normals should lie in the XY plane
-            // - 2. The initial normal should be such that tan x norm points up.
-            // - 3. The function of normals should be continuous except at single points where the
-            //      tangent points straight up/down (not contiguous regions)
+            // We calculate the rotation-minimizing (Bishop) frame using the double reflection method:
+            // https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/Computation-of-rotation-minimizing-frames.pdf
+            //
+            // NOTE: the RMF is a standard choice of frame, but it might be useful to consider this other
+            // method of generating frames to use additional objectives, such as keeping oriented with the Z-axis:
+            // https://onlinelibrary.wiley.com/doi/10.1111/cgf.14979
             let mut subdiv_normals = Vec::new();
             let mut subdiv_binormals = Vec::new();
-            let mut last_normal = Vector3::unit_z().cross(self.points[0].calculate_tangent()).normalize();
-            for tangent in subdiv_tangents.iter() {
-                let normal;
-                if *tangent == Vector3::unit_z() || *tangent == -Vector3::unit_z() {
-                    // In the case that our tangent points straight up or down, then we just
-                    // keep the last normal; any XY unit vector will be a valid normal.
-                    normal = last_normal;
-                }
-                else {
-                    // When the tangent isn't straight up or down, then by restriction 1, we
-                    // only have 2 choices of normal. So pick the one that makes a smaller
-                    // angle with our last normal. This should give the normal that agrees with
-                    // the underlying continuous function, since our spline is "reasonably smooth".
-                    // Our two options are actually negatives of each other, so the dot product
-                    // to the last normal will be negatives of each other. Larger dot product
-                    // means a smaller angle, so pick which one has a positive dot product.
-                    let up_normal = Vector3::unit_z().cross(*tangent).normalize();
-                    if up_normal.dot(last_normal) >= 0.0 {
-                        normal = up_normal;
-                    }
-                    else {
-                        normal = -up_normal;
-                    }
-                }
-                last_normal = normal;
-                subdiv_normals.push(normal);
+            subdiv_normals.push(Vector3::unit_z().cross(subdiv_tangents[0]).normalize());
+            subdiv_binormals.push(subdiv_tangents[0].cross(subdiv_normals[0]));
+            for i in 1..subdiv_points.len() {
+                let reflection_vector_lh = subdiv_points[i] - subdiv_points[i-1];
+                let normal_reflection_lh = subdiv_normals[i-1] - (2.0 / reflection_vector_lh.dot(reflection_vector_lh)) * (reflection_vector_lh.dot(subdiv_normals[i-1])) * reflection_vector_lh;
+                let tangent_reflection_lh = subdiv_tangents[i-1] - (2.0 / reflection_vector_lh.dot(reflection_vector_lh)) * (reflection_vector_lh.dot(subdiv_tangents[i-1])) * reflection_vector_lh;
 
-                subdiv_binormals.push(tangent.cross(normal));
+                let reflection_vector_rh = subdiv_tangents[i] - tangent_reflection_lh;
+                let normal = normal_reflection_lh - (2.0 / reflection_vector_rh.dot(reflection_vector_rh)) * (reflection_vector_rh.dot(normal_reflection_lh)) * reflection_vector_rh;
+                subdiv_normals.push(normal);
+                subdiv_binormals.push(subdiv_tangents[i].cross(normal));
             }
 
             // Calculate the polygon positions for our spline mesh. These positions will lie on the
