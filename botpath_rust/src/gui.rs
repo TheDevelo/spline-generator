@@ -123,6 +123,7 @@ impl Gui {
                         GuiMenu::Controls => {
                             ui.label("Controls:");
                             ui.label("WASD: Move around");
+                            ui.label("Shift: Speed up movement");
                             ui.label("Z: Toggle mouse capture, allowing camera control");
                             ui.label("Mouse: Aim the camera");
                             ui.label("Space: Insert a new point into the current spline");

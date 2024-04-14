@@ -59,25 +59,29 @@ impl Camera {
 
 pub struct CameraController {
     speed: f32,
+    speed_multiplier: f32,
     sensitivity: f32,
     is_forward_pressed: bool,
     is_backward_pressed: bool,
     is_left_pressed: bool,
     is_right_pressed: bool,
+    is_speed_multiplied: bool,
     delta_pitch: f32,
     delta_yaw: f32,
 }
 
 impl CameraController {
     // Speed is given in units per second, sensitivity in rad per pixel
-    pub fn new(speed: f32, sensitivity: f32) -> Self {
+    pub fn new(speed: f32, speed_multiplier:f32, sensitivity: f32) -> Self {
         Self {
             speed,
+            speed_multiplier,
             sensitivity,
             is_forward_pressed: false,
             is_backward_pressed: false,
             is_left_pressed: false,
             is_right_pressed: false,
+            is_speed_multiplied: false,
             delta_pitch: 0.0,
             delta_yaw: 0.0,
         }
@@ -95,20 +99,44 @@ impl CameraController {
             } => {
                 let is_pressed = *state == ElementState::Pressed;
                 match logical_key.as_ref() {
-                    Key::Character("w") | Key::Character("W") => {
+                    Key::Character("w") => {
                         self.is_forward_pressed = is_pressed;
+                        self.is_speed_multiplied = false;
                         true
                     }
-                    Key::Character("a") | Key::Character("A") => {
+                    Key::Character("W") => {
+                        self.is_forward_pressed = is_pressed;
+                        self.is_speed_multiplied = true;
+                        true
+                    }
+                    Key::Character("a") => {
                         self.is_left_pressed = is_pressed;
+                        self.is_speed_multiplied = false;
                         true
                     }
-                    Key::Character("s") | Key::Character("S") => {
+                    Key::Character("A") => {
+                        self.is_left_pressed = is_pressed;
+                        self.is_speed_multiplied = true;
+                        true
+                    }
+                    Key::Character("s") => {
                         self.is_backward_pressed = is_pressed;
+                        self.is_speed_multiplied = false;
                         true
                     }
-                    Key::Character("d") | Key::Character("D") => {
+                    Key::Character("S") => {
+                        self.is_backward_pressed = is_pressed;
+                        self.is_speed_multiplied = true;
+                        true
+                    }
+                    Key::Character("d") => {
                         self.is_right_pressed = is_pressed;
+                        self.is_speed_multiplied = false;
+                        true
+                    }
+                    Key::Character("D") => {
+                        self.is_right_pressed = is_pressed;
+                        self.is_speed_multiplied = true;
                         true
                     }
                     _ => false,
@@ -129,6 +157,10 @@ impl CameraController {
 
     pub fn update_camera(&mut self, camera: &mut Camera, dt: Duration) {
         let dt = dt.as_secs_f32();
+        let mut speed = self.speed;
+        if self.is_speed_multiplied {
+            speed *= self.speed_multiplier;
+        }
 
         let (sin_pitch, cos_pitch) = camera.pitch.sin_cos();
         let (sin_yaw, cos_yaw) = camera.yaw.sin_cos();
@@ -136,20 +168,20 @@ impl CameraController {
 
         // For forwards/backwards, we translate in the direction of the camera
         if self.is_forward_pressed {
-            camera.position += view_dir * self.speed * dt;
+            camera.position += view_dir * speed * dt;
         }
         if self.is_backward_pressed {
-            camera.position -= view_dir * self.speed * dt;
+            camera.position -= view_dir * speed * dt;
         }
 
         // Since we don't have any roll, left/right will always be in the z = 0 plane.
         let view_right = Vector3::new(sin_yaw, -cos_yaw, 0.0);
 
         if self.is_right_pressed {
-            camera.position += view_right * self.speed * dt;
+            camera.position += view_right * speed * dt;
         }
         if self.is_left_pressed {
-            camera.position -= view_right * self.speed * dt;
+            camera.position -= view_right * speed * dt;
         }
 
         camera.pitch += Rad(self.delta_pitch * self.sensitivity);

@@ -73,7 +73,7 @@ impl World {
             label: Some("camera_bind_group"),
         });
 
-        let camera_controller = camera::CameraController::new(2500.0, std::f32::consts::PI / 1000.0);
+        let camera_controller = camera::CameraController::new(500.0, 4.0, std::f32::consts::PI / 1000.0);
 
         let map_renderer = map::MapRenderer::new(render_state, &camera_bind_group_layout);
         let map = map::Map::empty(&render_state.device);
