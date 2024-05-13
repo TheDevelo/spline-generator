@@ -19,6 +19,8 @@ pub struct Gui {
     // gui state
     menu_selection: GuiMenu,
     vmf_future: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
+    load_state_future: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
+    save_state_future: Option<Pin<Box<dyn Future<Output = ()>>>>,
     avg_frame_time: f64,
 }
 
@@ -62,6 +64,8 @@ impl Gui {
 
             menu_selection: GuiMenu::Controls,
             vmf_future: None,
+            load_state_future: None,
+            save_state_future: None,
             avg_frame_time: 1.0 / 60.0, // 60 FPS is a reasonable starting assumption
         }
     }
@@ -84,6 +88,30 @@ impl Gui {
                     world.map = map::Map::from_string(&vmf, &render_state.device).unwrap();
                 }
                 self.vmf_future = None;
+            }
+        }
+
+        if let Some(load_state_future) = &mut self.load_state_future {
+            // Same polling setup as above
+            let waker = noop_waker();
+            let mut ctx = std::task::Context::from_waker(&waker);
+            let poll_result = load_state_future.as_mut().poll(&mut ctx);
+            if let std::task::Poll::Ready(save) = poll_result {
+                // Load the spline state into the interface
+                if let Some(save) = save {
+                    world.restore_state(&save);
+                }
+                self.load_state_future = None;
+            }
+        }
+
+        if let Some(save_state_future) = &mut self.save_state_future {
+            // Same polling setup as above, but we just set to none if finished
+            let waker = noop_waker();
+            let mut ctx = std::task::Context::from_waker(&waker);
+            let poll_result = save_state_future.as_mut().poll(&mut ctx);
+            if let std::task::Poll::Ready(_) = poll_result {
+                self.save_state_future = None;
             }
         }
     }
@@ -146,9 +174,41 @@ impl Gui {
                                     }
                                 }));
                             }
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                if ui.button("Load splines").clicked() && self.load_state_future.is_none() {
+                                    // Spawn a file picker for the spline save file
+                                    self.load_state_future = Some(Box::pin(async {
+                                        let save_file = AsyncFileDialog::new()
+                                            .add_filter("Spline state (.json)", &["json"])
+                                            .pick_file()
+                                            .await;
+                                        if let Some(save_file) = save_file {
+                                            String::from_utf8(save_file.read().await).ok()
+                                        }
+                                        else {
+                                            None
+                                        }
+                                    }));
+                                }
+                                if ui.button("Save splines").clicked() {
+                                    // Serialize our state, spawn a file picker, and write to the
+                                    // selected file
+                                    let serialized_state = world.save_state();
+                                    self.save_state_future = Some(Box::pin(async {
+                                        let save_file = AsyncFileDialog::new()
+                                            .add_filter("Spline state (.json)", &["json"])
+                                            .save_file()
+                                            .await;
+                                        if let Some(save_handle) = save_file {
+                                            let _ = save_handle.write(&serialized_state.into_bytes()).await;
+                                        };
+                                    }));
+                                }
+                            });
                         },
                         GuiMenu::Spline => {
-                            let enabled = world.spline.selected_point < world.spline.points.len() as u32;
+                            let enabled = world.spline.data.selected_point < world.spline.data.points.len() as u32;
                             // Default values to show in case we don't have a selected point and the UI is disabled
                             let mut default_point = spline::SplineControlPoint {
                                 position: cgmath::Point3::new(0.0, 0.0, 0.0),
@@ -156,7 +216,7 @@ impl Gui {
                                 yaw: cgmath::Deg(0.0),
                                 tangent_magnitude: 0.0,
                             };
-                            let point = world.spline.points.get_mut(world.spline.selected_point as usize).unwrap_or(&mut default_point);
+                            let point = world.spline.data.points.get_mut(world.spline.data.selected_point as usize).unwrap_or(&mut default_point);
 
                             let mut rebuild_spline = false;
                             ui.add_enabled_ui(enabled, |ui| {

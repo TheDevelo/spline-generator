@@ -5,6 +5,7 @@ use crate::world::camera::Camera;
 
 use cgmath::prelude::*;
 use cgmath::{Deg, Point3, Vector3};
+use serde::{Serialize, Deserialize};
 use winit::event::*;
 use winit::keyboard::{Key, NamedKey};
 use wgpu::util::DeviceExt;
@@ -33,12 +34,18 @@ impl crate::Vertex for SplineVertex {
     }
 }
 
-pub struct Spline {
-    // Spline data
+// Container so that we can serialize/deserialize for saving splines
+#[derive(Serialize, Deserialize)]
+pub struct SplineData {
     pub points: Vec<SplineControlPoint>,
     pub radius: f32,
     pub sides: u32,
     pub selected_point: u32,
+}
+
+pub struct Spline {
+    // Spline data
+    pub data: SplineData,
 
     // Representative mesh
     reconstruct_mesh: bool, // So that we only rebuild our mesh after we update the underlying points
@@ -85,10 +92,12 @@ impl Spline {
 
 
         Spline {
-            points: Vec::new(),
-            radius: 4.0,
-            sides: 3,
-            selected_point: 0,
+            data: SplineData {
+                points: Vec::new(),
+                radius: 4.0,
+                sides: 3,
+                selected_point: 0,
+            },
 
             reconstruct_mesh: false,
             vertex_buffer,
@@ -125,27 +134,27 @@ impl Spline {
                             yaw: camera.yaw.into(),
                             tangent_magnitude: 1024.0,
                         };
-                        if self.selected_point == self.points.len() as u32 {
+                        if self.data.selected_point == self.data.points.len() as u32 {
                             // Append a new control point to the end of the spline at the camera
-                            self.points.push(new_point);
+                            self.data.points.push(new_point);
                         }
                         else {
                             // Replace the point currently selected with our new point
-                            self.points[self.selected_point as usize] = new_point;
+                            self.data.points[self.data.selected_point as usize] = new_point;
                         }
-                        self.selected_point += 1;
+                        self.data.selected_point += 1;
                         self.request_rebuild();
                         true
                     },
                     Key::Named(NamedKey::ArrowLeft) => {
-                        if self.selected_point != 0 {
-                            self.selected_point -= 1;
+                        if self.data.selected_point != 0 {
+                            self.data.selected_point -= 1;
                         }
                         true
                     },
                     Key::Named(NamedKey::ArrowRight) => {
-                        if self.selected_point < self.points.len() as u32 {
-                            self.selected_point += 1;
+                        if self.data.selected_point < self.data.points.len() as u32 {
+                            self.data.selected_point += 1;
                         }
                         true
                     },
@@ -161,16 +170,16 @@ impl Spline {
             // Start by calculating the positions and tangents of our subdivisions on the spline.
             let mut subdiv_points = Vec::new();
             let mut subdiv_tangents = Vec::new();
-            for i in 0..(self.points.len() - 1) {
+            for i in 0..(self.data.points.len() - 1) {
                 for s in 0..SPLINE_SUBDIV {
-                    subdiv_points.push(self.points[i].interpolate(&self.points[i + 1], SPLINE_SUBDIV_T * s as f32));
+                    subdiv_points.push(self.data.points[i].interpolate(&self.data.points[i + 1], SPLINE_SUBDIV_T * s as f32));
 
-                    let tangent = self.points[i].interp_tangent_dir(&self.points[i + 1], SPLINE_SUBDIV_T * s as f32);
+                    let tangent = self.data.points[i].interp_tangent_dir(&self.data.points[i + 1], SPLINE_SUBDIV_T * s as f32);
                     subdiv_tangents.push(tangent);
                 }
             }
-            subdiv_points.push(self.points[self.points.len() - 1].position);
-            subdiv_tangents.push(self.points[self.points.len() - 1].calculate_tangent().normalize());
+            subdiv_points.push(self.data.points[self.data.points.len() - 1].position);
+            subdiv_tangents.push(self.data.points[self.data.points.len() - 1].calculate_tangent().normalize());
 
             // Calculate the normals and binormals from the tangents of each subdivision.
             // We calculate the rotation-minimizing (Bishop) frame using the double reflection method:
@@ -197,8 +206,8 @@ impl Spline {
             // Calculate the polygon positions for our spline mesh. These positions will lie on the
             // normal plane, and thus can be turned into offsets with the normal and binormal.
             let mut poly_positions = Vec::new();
-            for i in 0..self.sides {
-                let angle = i as f32 / self.sides as f32 * std::f32::consts::TAU;
+            for i in 0..self.data.sides {
+                let angle = i as f32 / self.data.sides as f32 * std::f32::consts::TAU;
                 poly_positions.push(angle.sin_cos());
             }
 
@@ -206,7 +215,7 @@ impl Spline {
             let mut vertices = Vec::new();
             for i in 0..subdiv_points.len() {
                 for poly_pos in poly_positions.iter() {
-                    let position = subdiv_points[i] + (poly_pos.0 * subdiv_normals[i] + poly_pos.1 * subdiv_binormals[i]) * self.radius;
+                    let position = subdiv_points[i] + (poly_pos.0 * subdiv_normals[i] + poly_pos.1 * subdiv_binormals[i]) * self.data.radius;
                     vertices.push(SplineVertex {
                         position: position.into(),
                         t_value: i as f32 * SPLINE_SUBDIV_T,
@@ -217,17 +226,17 @@ impl Spline {
             // Construct our indices to form the mesh
             let mut indices: Vec<u32> = Vec::new();
             // End-cap for our first subdivision
-            for i in 1..(self.sides - 1) {
+            for i in 1..(self.data.sides - 1) {
                 indices.push(0);
                 indices.push(i);
                 indices.push(i + 1);
             }
             // Triangles between subdivisions
             for subdiv in 0..(subdiv_points.len() - 1) {
-                let base_i = subdiv as u32 * self.sides;
-                let next_base_i = (subdiv as u32 + 1) * self.sides;
-                for i in 0..self.sides {
-                    let next_i = (i + 1) % self.sides;
+                let base_i = subdiv as u32 * self.data.sides;
+                let next_base_i = (subdiv as u32 + 1) * self.data.sides;
+                for i in 0..self.data.sides {
+                    let next_i = (i + 1) % self.data.sides;
                     indices.push(base_i + next_i);
                     indices.push(base_i + i);
                     indices.push(next_base_i + next_i);
@@ -238,8 +247,8 @@ impl Spline {
                 }
             }
             // End-cap for our last subdivision
-            let end_base_i = (subdiv_points.len() as u32 - 1) * self.sides;
-            for i in 1..(self.sides - 1) {
+            let end_base_i = (subdiv_points.len() as u32 - 1) * self.data.sides;
+            for i in 1..(self.data.sides - 1) {
                 indices.push(end_base_i);
                 indices.push(end_base_i + i);
                 indices.push(end_base_i + i + 1);
@@ -265,10 +274,11 @@ impl Spline {
             self.reconstruct_mesh = false;
         }
 
-        render_state.queue.write_buffer(&self.selected_point_buffer, 0, bytemuck::cast_slice(&[self.selected_point as f32]));
+        render_state.queue.write_buffer(&self.selected_point_buffer, 0, bytemuck::cast_slice(&[self.data.selected_point as f32]));
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct SplineControlPoint {
     pub position: Point3<f32>,
     pub pitch: Deg<f32>,

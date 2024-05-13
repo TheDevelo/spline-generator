@@ -156,4 +156,13 @@ impl World {
         self.map_renderer.draw(&mut render_pass, &self.camera_bind_group, &self.map);
         self.spline_renderer.draw(&mut render_pass, &self.camera_bind_group, &self.spline);
     }
+
+    pub fn restore_state(&mut self, serialized_state: &str) {
+        self.spline.data = serde_json::from_str(serialized_state).unwrap();
+        self.spline.request_rebuild();
+    }
+
+    pub fn save_state(&self) -> String {
+        serde_json::to_string(&self.spline.data).unwrap()
+    }
 }
