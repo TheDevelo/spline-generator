@@ -22,6 +22,7 @@ pub struct Gui {
     load_state_future: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
     save_state_future: Option<Pin<Box<dyn Future<Output = ()>>>>,
     avg_frame_time: f64,
+    window_swapped: bool,
 }
 
 #[derive(Eq, PartialEq)]
@@ -67,6 +68,7 @@ impl Gui {
             load_state_future: None,
             save_state_future: None,
             avg_frame_time: 1.0 / 60.0, // 60 FPS is a reasonable starting assumption
+            window_swapped: false,
         }
     }
 
@@ -129,22 +131,45 @@ impl Gui {
         let full_ouptut = self.state.egui_ctx().run(raw_input, |ctx| {
             let height_pts = render_state.size.height as f32 / ctx.pixels_per_point();
 
+            let main_anchor;
+            let fps_anchor;
+            let main_offset;
+            let fps_offset;
+            if self.window_swapped {
+                main_anchor = egui::Align2::LEFT_TOP;
+                fps_anchor = egui::Align2::RIGHT_TOP;
+                main_offset = (10.0, 10.0);
+                fps_offset = (-10.0, 10.0);
+            }
+            else {
+                main_anchor = egui::Align2::RIGHT_TOP;
+                fps_anchor = egui::Align2::LEFT_TOP;
+                main_offset = (-10.0, 10.0);
+                fps_offset = (10.0, 10.0);
+            }
+
             egui::Window::new("Path Controls")
-                .anchor(egui::Align2::RIGHT_TOP, (-10.0, 10.0))
+                .anchor(main_anchor, main_offset)
                 .fixed_size((300.0, height_pts - 55.0))
                 .show(&ctx, |ui| {
                     ui.set_width(ui.available_width());
                     ui.set_height(ui.available_height());
                     ui.add_space(8.0);
                     // Menu selector
-                    egui::ComboBox::from_id_source("Menu Selector")
-                        .selected_text(format!("{}", self.menu_selection))
-                        .show_ui(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.selectable_value(&mut self.menu_selection, GuiMenu::Controls, format!("{}", GuiMenu::Controls));
-                            ui.selectable_value(&mut self.menu_selection, GuiMenu::Map, format!("{}", GuiMenu::Map));
-                            ui.selectable_value(&mut self.menu_selection, GuiMenu::Spline, format!("{}", GuiMenu::Spline));
-                        });
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_source("Menu Selector")
+                            .selected_text(format!("{}", self.menu_selection))
+                            .show_ui(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.selectable_value(&mut self.menu_selection, GuiMenu::Controls, format!("{}", GuiMenu::Controls));
+                                ui.selectable_value(&mut self.menu_selection, GuiMenu::Map, format!("{}", GuiMenu::Map));
+                                ui.selectable_value(&mut self.menu_selection, GuiMenu::Spline, format!("{}", GuiMenu::Spline));
+                            });
+                        ui.allocate_space(ui.available_size());
+                        if ui.button("Swap Sides").clicked() {
+                            self.window_swapped = !self.window_swapped;
+                        }
+                    });
                     ui.separator();
 
                     match self.menu_selection {
@@ -268,7 +293,7 @@ impl Gui {
                 });
 
             egui::Window::new("FPS Counter")
-                .anchor(egui::Align2::LEFT_TOP, (10.0, 10.0))
+                .anchor(fps_anchor, fps_offset)
                 .resizable(false)
                 .title_bar(false)
                 .frame(egui::Frame {
