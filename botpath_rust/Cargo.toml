@@ -11,7 +11,7 @@ anyhow = "1.0"
 bytemuck = { version = "1.14", features = [ "derive" ] }
 cfg-if = "1"
 cgmath = { version = "0.18", features = ["serde"] }
-egui = "0.25"
+egui = { version = "0.25", features = ["serde"] }
 egui-winit = { version = "0.25", default-features = false, features = ["links"]}
 egui-wgpu = "0.25"
 env_logger = "0.10"

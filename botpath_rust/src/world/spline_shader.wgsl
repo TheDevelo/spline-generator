@@ -11,13 +11,13 @@ struct VertexInput {
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec3<f32>,
+    @location(0) color: vec4<f32>,
 };
 
 @group(0) @binding(0)
 var<uniform> camera: CameraUniform;
 @group(1) @binding(0)
-var<uniform> selected_point: f32;
+var<storage> point_colors: array<vec4<f32>>;
 
 @vertex
 fn vs_main(
@@ -25,8 +25,9 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
     out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
-    let t = min(abs(model.t_value - selected_point), 1.0);
-    out.color = vec3<f32>(1.0) * t + vec3<f32>(0.0, 1.0, 1.0) * (1.0 - t);
+    let lower_t = floor(model.t_value);
+    let interp_t = model.t_value - lower_t;
+    out.color = point_colors[u32(lower_t)] * (1.0 - interp_t) + point_colors[u32(lower_t) + 1u] * interp_t;
     return out;
 }
 
@@ -34,5 +35,5 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, 1.0);
+    return in.color;
 }

@@ -122,7 +122,7 @@ impl World {
         self.camera_uniform.update_view_proj(&self.camera);
         render_state.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
 
-        self.spline.update(render_state);
+        self.spline.update(render_state, &self.spline_renderer);
     }
 
     pub fn render(&self, _render_state: &RenderState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {

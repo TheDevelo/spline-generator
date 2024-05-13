@@ -5,6 +5,7 @@ use crate::world::camera::Camera;
 
 use cgmath::prelude::*;
 use cgmath::{Deg, Point3, Vector3};
+use egui::Color32;
 use serde::{Serialize, Deserialize};
 use winit::event::*;
 use winit::keyboard::{Key, NamedKey};
@@ -40,20 +41,21 @@ pub struct SplineData {
     pub points: Vec<SplineControlPoint>,
     pub radius: f32,
     pub sides: u32,
-    pub selected_point: u32,
 }
 
 pub struct Spline {
     // Spline data
     pub data: SplineData,
+    pub selected_point: u32,
 
     // Representative mesh
     reconstruct_mesh: bool, // So that we only rebuild our mesh after we update the underlying points
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
-    selected_point_buffer: wgpu::Buffer,
-    selected_point_bind_group: wgpu::BindGroup,
+    point_colors_buffer: wgpu::Buffer,
+    point_colors_buffer_size: usize,
+    point_colors_bind_group: wgpu::BindGroup,
 }
 
 impl Spline {
@@ -71,23 +73,21 @@ impl Spline {
             mapped_at_creation: false,
         });
 
-        // Need to store this buffer/bind group per spline, since we can't write to a buffer
-        // mid-render pass. I think.
-        let selected_point_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Selected Point Buffer"),
-            contents: bytemuck::cast_slice(&[0.0 as f32]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        let point_colors_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Point Colors Buffer"),
+            contents: bytemuck::cast_slice(&[0.0 as f32; 128]),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
-        let selected_point_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &renderer.selected_point_bind_group_layout,
+        let point_colors_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &renderer.point_colors_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: selected_point_buffer.as_entire_binding(),
+                    resource: point_colors_buffer.as_entire_binding(),
                 }
             ],
-            label: Some("selected_point_bind_group"),
+            label: Some("point_colors_bind_group"),
         });
 
 
@@ -96,15 +96,16 @@ impl Spline {
                 points: Vec::new(),
                 radius: 4.0,
                 sides: 3,
-                selected_point: 0,
             },
+            selected_point: 0,
 
             reconstruct_mesh: false,
             vertex_buffer,
             index_buffer,
             index_count: 0,
-            selected_point_buffer,
-            selected_point_bind_group,
+            point_colors_buffer,
+            point_colors_buffer_size: 128,
+            point_colors_bind_group,
         }
     }
 
@@ -133,28 +134,29 @@ impl Spline {
                             pitch: camera.pitch.into(),
                             yaw: camera.yaw.into(),
                             tangent_magnitude: 1024.0,
+                            color: Color32::WHITE,
                         };
-                        if self.data.selected_point == self.data.points.len() as u32 {
+                        if self.selected_point == self.data.points.len() as u32 {
                             // Append a new control point to the end of the spline at the camera
                             self.data.points.push(new_point);
                         }
                         else {
                             // Replace the point currently selected with our new point
-                            self.data.points[self.data.selected_point as usize] = new_point;
+                            self.data.points[self.selected_point as usize] = new_point;
                         }
-                        self.data.selected_point += 1;
+                        self.selected_point += 1;
                         self.request_rebuild();
                         true
                     },
                     Key::Named(NamedKey::ArrowLeft) => {
-                        if self.data.selected_point != 0 {
-                            self.data.selected_point -= 1;
+                        if self.selected_point != 0 {
+                            self.selected_point -= 1;
                         }
                         true
                     },
                     Key::Named(NamedKey::ArrowRight) => {
-                        if self.data.selected_point < self.data.points.len() as u32 {
-                            self.data.selected_point += 1;
+                        if self.selected_point < self.data.points.len() as u32 {
+                            self.selected_point += 1;
                         }
                         true
                     },
@@ -165,7 +167,7 @@ impl Spline {
         }
     }
 
-    pub fn update(&mut self, render_state: &RenderState) {
+    pub fn update(&mut self, render_state: &RenderState, renderer: &SplineRenderer) {
         if self.reconstruct_mesh {
             // Start by calculating the positions and tangents of our subdivisions on the spline.
             let mut subdiv_points = Vec::new();
@@ -270,11 +272,58 @@ impl Spline {
             self.index_buffer = index_buffer;
             self.index_count = indices.len() as u32;
 
-            // Rebuild the vertex list
             self.reconstruct_mesh = false;
         }
 
-        render_state.queue.write_buffer(&self.selected_point_buffer, 0, bytemuck::cast_slice(&[self.data.selected_point as f32]));
+        // Write to the point color buffer
+        // First, construct a slice of f32s representing each color at each control point
+        let mut color_vec = Vec::with_capacity(self.data.points.len() * 4);
+        for (i, point) in self.data.points.iter().enumerate() {
+            let mut color_rgba;
+            if i == self.selected_point as usize {
+                // Current point is selected, so set to the inverse color
+                color_rgba = egui::Rgba::from(point.color.to_opaque());
+                color_rgba = egui::Rgba::from_rgb(1.0 - color_rgba.r(), 1.0 - color_rgba.g(), 1.0 - color_rgba.b());
+            }
+            else {
+                color_rgba = egui::Rgba::from(point.color);
+            }
+            let (r, g, b, a) = color_rgba.to_tuple();
+            color_vec.push(r);
+            color_vec.push(g);
+            color_vec.push(b);
+            color_vec.push(a);
+        }
+
+        // Now copy our constructed slice to the GPU
+        if self.data.points.len() * 4 >= self.point_colors_buffer_size {
+            // Pad out color_vec to have twice the size of point_colors_buffer_size
+            self.point_colors_buffer_size *= 2;
+            while color_vec.len() < self.point_colors_buffer_size {
+                color_vec.push(0.0);
+            }
+
+            // Our point color buffer is too small, so create a new one that is double the size
+            self.point_colors_buffer = render_state.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Point Colors Buffer"),
+                contents: bytemuck::cast_slice(&color_vec),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
+
+            self.point_colors_bind_group = render_state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &renderer.point_colors_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.point_colors_buffer.as_entire_binding(),
+                    }
+                ],
+                label: Some("point_colors_bind_group"),
+            });
+        }
+        else {
+            render_state.queue.write_buffer(&self.point_colors_buffer, 0, bytemuck::cast_slice(&color_vec));
+        }
     }
 }
 
@@ -284,6 +333,7 @@ pub struct SplineControlPoint {
     pub pitch: Deg<f32>,
     pub yaw: Deg<f32>,
     pub tangent_magnitude: f32,
+    pub color: Color32,
 }
 
 impl SplineControlPoint {
@@ -321,20 +371,22 @@ impl SplineControlPoint {
 // freely draw multiple Splines without maintaining separate copies of our rendering state
 pub struct SplineRenderer {
     render_pipeline: wgpu::RenderPipeline,
-    selected_point_bind_group_layout: wgpu::BindGroupLayout,
+    point_colors_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl SplineRenderer {
     pub fn new(render_state: &RenderState, camera_layout: &wgpu::BindGroupLayout) -> Self {
         let shader = render_state.device.create_shader_module(wgpu::include_wgsl!("spline_shader.wgsl"));
 
-        let selected_point_bind_group_layout = render_state.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let point_colors_bind_group_layout = render_state.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage {
+                            read_only: true,
+                        },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -348,7 +400,7 @@ impl SplineRenderer {
             label: Some("Spline Render Pipeline Layout"),
             bind_group_layouts: &[
                 camera_layout,
-                &selected_point_bind_group_layout,
+                &point_colors_bind_group_layout,
             ],
             push_constant_ranges: &[],
         });
@@ -368,7 +420,7 @@ impl SplineRenderer {
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: render_state.config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -398,7 +450,7 @@ impl SplineRenderer {
 
         SplineRenderer {
             render_pipeline,
-            selected_point_bind_group_layout,
+            point_colors_bind_group_layout,
         }
     }
 
@@ -406,7 +458,7 @@ impl SplineRenderer {
         render_pass.set_pipeline(&self.render_pipeline);
 
         render_pass.set_bind_group(0, camera_bind_group, &[]);
-        render_pass.set_bind_group(1, &spline.selected_point_bind_group, &[]);
+        render_pass.set_bind_group(1, &spline.point_colors_bind_group, &[]);
 
         render_pass.set_vertex_buffer(0, spline.vertex_buffer.slice(..));
         render_pass.set_index_buffer(spline.index_buffer.slice(..), wgpu::IndexFormat::Uint32);

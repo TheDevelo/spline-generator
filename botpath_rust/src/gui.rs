@@ -1,7 +1,7 @@
 use crate::RenderState;
 use crate::world::{map, spline, World};
 
-use egui::{Context, DragValue};
+use egui::{Color32, Context, DragValue};
 use egui_winit::{EventResponse, State};
 use egui_wgpu::renderer::{Renderer, ScreenDescriptor};
 use noop_waker::noop_waker;
@@ -208,15 +208,16 @@ impl Gui {
                             });
                         },
                         GuiMenu::Spline => {
-                            let enabled = world.spline.data.selected_point < world.spline.data.points.len() as u32;
+                            let enabled = world.spline.selected_point < world.spline.data.points.len() as u32;
                             // Default values to show in case we don't have a selected point and the UI is disabled
                             let mut default_point = spline::SplineControlPoint {
                                 position: cgmath::Point3::new(0.0, 0.0, 0.0),
                                 pitch: cgmath::Deg(0.0),
                                 yaw: cgmath::Deg(0.0),
                                 tangent_magnitude: 0.0,
+                                color: Color32::WHITE,
                             };
-                            let point = world.spline.data.points.get_mut(world.spline.data.selected_point as usize).unwrap_or(&mut default_point);
+                            let point = world.spline.data.points.get_mut(world.spline.selected_point as usize).unwrap_or(&mut default_point);
 
                             let mut rebuild_spline = false;
                             ui.add_enabled_ui(enabled, |ui| {
@@ -251,6 +252,11 @@ impl Gui {
                                     if ui.add(DragValue::new(&mut point.tangent_magnitude)).changed() {
                                         rebuild_spline = true;
                                     }
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Color:");
+                                    ui.color_edit_button_srgba(&mut point.color);
                                 });
                             });
 
