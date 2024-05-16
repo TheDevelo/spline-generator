@@ -11,9 +11,6 @@ use winit::event::*;
 use winit::keyboard::{Key, NamedKey};
 use wgpu::util::DeviceExt;
 
-const SPLINE_SUBDIV: u32 = 16;
-const SPLINE_SUBDIV_T: f32 = 1.0 / SPLINE_SUBDIV as f32;
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SplineVertex {
@@ -41,6 +38,7 @@ pub struct SplineData {
     pub points: Vec<SplineControlPoint>,
     pub radius: f32,
     pub sides: u32,
+    pub subdivisions: u32,
 }
 
 pub struct Spline {
@@ -96,6 +94,7 @@ impl Spline {
                 points: Vec::new(),
                 radius: 4.0,
                 sides: 3,
+                subdivisions: 16,
             },
             selected_point: 0,
 
@@ -133,7 +132,7 @@ impl Spline {
                             position: camera.position.map(|c| c.round()),
                             pitch: camera.pitch.into(),
                             yaw: camera.yaw.into(),
-                            tangent_magnitude: 1024.0,
+                            tangent_magnitude: 512.0,
                             color: Color32::WHITE,
                         };
                         if self.selected_point == self.data.points.len() as u32 {
@@ -169,91 +168,95 @@ impl Spline {
 
     pub fn update(&mut self, render_state: &RenderState, renderer: &SplineRenderer) {
         if self.reconstruct_mesh {
-            // Start by calculating the positions and tangents of our subdivisions on the spline.
-            let mut subdiv_points = Vec::new();
-            let mut subdiv_tangents = Vec::new();
-            for i in 0..(self.data.points.len() - 1) {
-                for s in 0..SPLINE_SUBDIV {
-                    subdiv_points.push(self.data.points[i].interpolate(&self.data.points[i + 1], SPLINE_SUBDIV_T * s as f32));
-
-                    let tangent = self.data.points[i].interp_tangent_dir(&self.data.points[i + 1], SPLINE_SUBDIV_T * s as f32);
-                    subdiv_tangents.push(tangent);
-                }
-            }
-            subdiv_points.push(self.data.points[self.data.points.len() - 1].position);
-            subdiv_tangents.push(self.data.points[self.data.points.len() - 1].calculate_tangent().normalize());
-
-            // Calculate the normals and binormals from the tangents of each subdivision.
-            // We calculate the rotation-minimizing (Bishop) frame using the double reflection method:
-            // https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/Computation-of-rotation-minimizing-frames.pdf
-            //
-            // NOTE: the RMF is a standard choice of frame, but it might be useful to consider this other
-            // method of generating frames to use additional objectives, such as keeping oriented with the Z-axis:
-            // https://onlinelibrary.wiley.com/doi/10.1111/cgf.14979
-            let mut subdiv_normals = Vec::new();
-            let mut subdiv_binormals = Vec::new();
-            subdiv_normals.push(Vector3::unit_z().cross(subdiv_tangents[0]).normalize());
-            subdiv_binormals.push(subdiv_tangents[0].cross(subdiv_normals[0]));
-            for i in 1..subdiv_points.len() {
-                let reflection_vector_lh = subdiv_points[i] - subdiv_points[i-1];
-                let normal_reflection_lh = subdiv_normals[i-1] - (2.0 / reflection_vector_lh.dot(reflection_vector_lh)) * (reflection_vector_lh.dot(subdiv_normals[i-1])) * reflection_vector_lh;
-                let tangent_reflection_lh = subdiv_tangents[i-1] - (2.0 / reflection_vector_lh.dot(reflection_vector_lh)) * (reflection_vector_lh.dot(subdiv_tangents[i-1])) * reflection_vector_lh;
-
-                let reflection_vector_rh = subdiv_tangents[i] - tangent_reflection_lh;
-                let normal = normal_reflection_lh - (2.0 / reflection_vector_rh.dot(reflection_vector_rh)) * (reflection_vector_rh.dot(normal_reflection_lh)) * reflection_vector_rh;
-                subdiv_normals.push(normal);
-                subdiv_binormals.push(subdiv_tangents[i].cross(normal));
-            }
-
-            // Calculate the polygon positions for our spline mesh. These positions will lie on the
-            // normal plane, and thus can be turned into offsets with the normal and binormal.
-            let mut poly_positions = Vec::new();
-            for i in 0..self.data.sides {
-                let angle = i as f32 / self.data.sides as f32 * std::f32::consts::TAU;
-                poly_positions.push(angle.sin_cos());
-            }
-
-            // Construct the vertices for our mesh
             let mut vertices = Vec::new();
-            for i in 0..subdiv_points.len() {
-                for poly_pos in poly_positions.iter() {
-                    let position = subdiv_points[i] + (poly_pos.0 * subdiv_normals[i] + poly_pos.1 * subdiv_binormals[i]) * self.data.radius;
-                    vertices.push(SplineVertex {
-                        position: position.into(),
-                        t_value: i as f32 * SPLINE_SUBDIV_T,
-                    });
-                }
-            }
-
-            // Construct our indices to form the mesh
             let mut indices: Vec<u32> = Vec::new();
-            // End-cap for our first subdivision
-            for i in 1..(self.data.sides - 1) {
-                indices.push(0);
-                indices.push(i);
-                indices.push(i + 1);
-            }
-            // Triangles between subdivisions
-            for subdiv in 0..(subdiv_points.len() - 1) {
-                let base_i = subdiv as u32 * self.data.sides;
-                let next_base_i = (subdiv as u32 + 1) * self.data.sides;
-                for i in 0..self.data.sides {
-                    let next_i = (i + 1) % self.data.sides;
-                    indices.push(base_i + next_i);
-                    indices.push(base_i + i);
-                    indices.push(next_base_i + next_i);
+            // Processing relies on at least one point, so skip if we have none
+            if self.data.points.len() > 0 {
+                let subdiv_t = 1.0 / self.data.subdivisions as f32;
+                // Start by calculating the positions and tangents of our subdivisions on the spline.
+                let mut subdiv_points = Vec::new();
+                let mut subdiv_tangents = Vec::new();
+                for i in 0..(self.data.points.len() - 1) {
+                    for s in 0..self.data.subdivisions {
+                        subdiv_points.push(self.data.points[i].interpolate(&self.data.points[i + 1], subdiv_t * s as f32));
 
-                    indices.push(base_i + i);
-                    indices.push(next_base_i + i);
-                    indices.push(next_base_i + next_i);
+                        let tangent = self.data.points[i].interp_tangent_dir(&self.data.points[i + 1], subdiv_t * s as f32);
+                        subdiv_tangents.push(tangent);
+                    }
                 }
-            }
-            // End-cap for our last subdivision
-            let end_base_i = (subdiv_points.len() as u32 - 1) * self.data.sides;
-            for i in 1..(self.data.sides - 1) {
-                indices.push(end_base_i);
-                indices.push(end_base_i + i);
-                indices.push(end_base_i + i + 1);
+                subdiv_points.push(self.data.points[self.data.points.len() - 1].position);
+                subdiv_tangents.push(self.data.points[self.data.points.len() - 1].calculate_tangent().normalize());
+
+                // Calculate the normals and binormals from the tangents of each subdivision.
+                // We calculate the rotation-minimizing (Bishop) frame using the double reflection method:
+                // https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/Computation-of-rotation-minimizing-frames.pdf
+                //
+                // NOTE: the RMF is a standard choice of frame, but it might be useful to consider this other
+                // method of generating frames to use additional objectives, such as keeping oriented with the Z-axis:
+                // https://onlinelibrary.wiley.com/doi/10.1111/cgf.14979
+                let mut subdiv_normals = Vec::new();
+                let mut subdiv_binormals = Vec::new();
+                subdiv_normals.push(Vector3::unit_z().cross(subdiv_tangents[0]).normalize());
+                subdiv_binormals.push(subdiv_tangents[0].cross(subdiv_normals[0]));
+                for i in 1..subdiv_points.len() {
+                    let reflection_vector_lh = subdiv_points[i] - subdiv_points[i-1];
+                    let normal_reflection_lh = subdiv_normals[i-1] - (2.0 / reflection_vector_lh.dot(reflection_vector_lh)) * (reflection_vector_lh.dot(subdiv_normals[i-1])) * reflection_vector_lh;
+                    let tangent_reflection_lh = subdiv_tangents[i-1] - (2.0 / reflection_vector_lh.dot(reflection_vector_lh)) * (reflection_vector_lh.dot(subdiv_tangents[i-1])) * reflection_vector_lh;
+
+                    let reflection_vector_rh = subdiv_tangents[i] - tangent_reflection_lh;
+                    let normal = normal_reflection_lh - (2.0 / reflection_vector_rh.dot(reflection_vector_rh)) * (reflection_vector_rh.dot(normal_reflection_lh)) * reflection_vector_rh;
+                    subdiv_normals.push(normal);
+                    subdiv_binormals.push(subdiv_tangents[i].cross(normal));
+                }
+
+                // Calculate the polygon positions for our spline mesh. These positions will lie on the
+                // normal plane, and thus can be turned into offsets with the normal and binormal.
+                let mut poly_positions = Vec::new();
+                for i in 0..self.data.sides {
+                    let angle = i as f32 / self.data.sides as f32 * std::f32::consts::TAU;
+                    poly_positions.push(angle.sin_cos());
+                }
+
+                // Construct the vertices for our mesh
+                for i in 0..subdiv_points.len() {
+                    for poly_pos in poly_positions.iter() {
+                        let position = subdiv_points[i] + (poly_pos.0 * subdiv_normals[i] + poly_pos.1 * subdiv_binormals[i]) * self.data.radius;
+                        vertices.push(SplineVertex {
+                            position: position.into(),
+                            t_value: i as f32 * subdiv_t,
+                        });
+                    }
+                }
+
+                // Construct our indices to form the mesh
+                // End-cap for our first subdivision
+                for i in 1..(self.data.sides - 1) {
+                    indices.push(0);
+                    indices.push(i);
+                    indices.push(i + 1);
+                }
+                // Triangles between subdivisions
+                for subdiv in 0..(subdiv_points.len() - 1) {
+                    let base_i = subdiv as u32 * self.data.sides;
+                    let next_base_i = (subdiv as u32 + 1) * self.data.sides;
+                    for i in 0..self.data.sides {
+                        let next_i = (i + 1) % self.data.sides;
+                        indices.push(base_i + next_i);
+                        indices.push(base_i + i);
+                        indices.push(next_base_i + next_i);
+
+                        indices.push(base_i + i);
+                        indices.push(next_base_i + i);
+                        indices.push(next_base_i + next_i);
+                    }
+                }
+                // End-cap for our last subdivision
+                let end_base_i = (subdiv_points.len() as u32 - 1) * self.data.sides;
+                for i in 1..(self.data.sides - 1) {
+                    indices.push(end_base_i);
+                    indices.push(end_base_i + i);
+                    indices.push(end_base_i + i + 1);
+                }
             }
 
             // Build our mesh buffers for the GPU

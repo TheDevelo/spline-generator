@@ -245,6 +245,25 @@ impl Gui {
                             let point = world.spline.data.points.get_mut(world.spline.selected_point as usize).unwrap_or(&mut default_point);
 
                             let mut rebuild_spline = false;
+                            ui.horizontal(|ui| {
+                                ui.label("Radius:");
+                                if ui.add(DragValue::new(&mut world.spline.data.radius)).changed() {
+                                    rebuild_spline = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Sides:");
+                                if ui.add(DragValue::new(&mut world.spline.data.sides).clamp_range(1..=std::u32::MAX)).changed() {
+                                    rebuild_spline = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Subdivisions:");
+                                if ui.add(DragValue::new(&mut world.spline.data.subdivisions).clamp_range(1..=std::u32::MAX)).changed() {
+                                    rebuild_spline = true;
+                                }
+                            });
+                            ui.separator();
                             ui.add_enabled_ui(enabled, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label("X:");
