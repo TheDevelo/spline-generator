@@ -18,9 +18,12 @@ pub struct Gui {
 
     // gui state
     menu_selection: GuiMenu,
+    snap_value: f32,
+
     vmf_future: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
     load_state_future: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
     save_state_future: Option<Pin<Box<dyn Future<Output = ()>>>>,
+
     avg_frame_time: f64,
     window_swapped: bool,
 }
@@ -64,9 +67,12 @@ impl Gui {
             renderer,
 
             menu_selection: GuiMenu::Controls,
+            snap_value: 64.0,
+
             vmf_future: None,
             load_state_future: None,
             save_state_future: None,
+
             avg_frame_time: 1.0 / 60.0, // 60 FPS is a reasonable starting assumption
             window_swapped: false,
         }
@@ -245,6 +251,7 @@ impl Gui {
                             let point = world.spline.data.points.get_mut(world.spline.selected_point as usize).unwrap_or(&mut default_point);
 
                             let mut rebuild_spline = false;
+                            ui.label("Spline properties");
                             ui.horizontal(|ui| {
                                 ui.label("Radius:");
                                 if ui.add(DragValue::new(&mut world.spline.data.radius)).changed() {
@@ -264,6 +271,13 @@ impl Gui {
                                 }
                             });
                             ui.separator();
+
+                            if enabled {
+                                ui.label(format!("Point properties - Selected point: {}", world.spline.selected_point + 1));
+                            }
+                            else {
+                                ui.label("Point properties");
+                            }
                             ui.add_enabled_ui(enabled, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label("X:");
@@ -276,6 +290,18 @@ impl Gui {
                                     }
                                     ui.label("Z:");
                                     if ui.add(DragValue::new(&mut point.position.z)).changed() {
+                                        rebuild_spline = true;
+                                    }
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Snap position to");
+                                    ui.add(DragValue::new(&mut self.snap_value));
+                                    ui.label("-");
+                                    if ui.button("Snap").clicked() {
+                                        point.position.x = (point.position.x / self.snap_value).round() * self.snap_value;
+                                        point.position.y = (point.position.y / self.snap_value).round() * self.snap_value;
+                                        point.position.z = (point.position.z / self.snap_value).round() * self.snap_value;
                                         rebuild_spline = true;
                                     }
                                 });

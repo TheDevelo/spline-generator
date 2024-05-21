@@ -128,18 +128,29 @@ impl Spline {
             } if *state == ElementState::Pressed && *repeat == false => {
                 match logical_key.as_ref() {
                     Key::Named(NamedKey::Space) => {
-                        let new_point = SplineControlPoint {
+                        let mut new_point = SplineControlPoint {
                             position: camera.position.map(|c| c.round()),
                             pitch: camera.pitch.into(),
                             yaw: camera.yaw.into(),
                             tangent_magnitude: 512.0,
                             color: Color32::WHITE,
                         };
+
                         if self.selected_point == self.data.points.len() as u32 {
+                            // Set the tangent magnitude and color to be that of the previous point (if there is one)
+                            if self.selected_point != 0 {
+                                new_point.tangent_magnitude = self.data.points[self.selected_point as usize - 1].tangent_magnitude;
+                                new_point.color = self.data.points[self.selected_point as usize - 1].color;
+                            }
+
                             // Append a new control point to the end of the spline at the camera
                             self.data.points.push(new_point);
                         }
                         else {
+                            // Set the tangent magnitude and color to be the same as the point we are replacing
+                            new_point.tangent_magnitude = self.data.points[self.selected_point as usize].tangent_magnitude;
+                            new_point.color = self.data.points[self.selected_point as usize].color;
+
                             // Replace the point currently selected with our new point
                             self.data.points[self.selected_point as usize] = new_point;
                         }
