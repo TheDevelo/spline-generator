@@ -1,5 +1,6 @@
 use crate::RenderState;
 use crate::world::{map, spline, World};
+use crate::world::spline::export;
 
 use egui::{Color32, Context, DragValue};
 use egui_winit::{EventResponse, State};
@@ -23,6 +24,7 @@ pub struct Gui {
     vmf_future: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
     load_state_future: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
     save_state_future: Option<Pin<Box<dyn Future<Output = ()>>>>,
+    export_spline_future: Option<Pin<Box<dyn Future<Output = ()>>>>,
 
     avg_frame_time: f64,
     window_swapped: bool,
@@ -72,6 +74,7 @@ impl Gui {
             vmf_future: None,
             load_state_future: None,
             save_state_future: None,
+            export_spline_future: None,
 
             avg_frame_time: 1.0 / 60.0, // 60 FPS is a reasonable starting assumption
             window_swapped: false,
@@ -120,6 +123,16 @@ impl Gui {
             let poll_result = save_state_future.as_mut().poll(&mut ctx);
             if let std::task::Poll::Ready(_) = poll_result {
                 self.save_state_future = None;
+            }
+        }
+
+        if let Some(export_spline_future) = &mut self.export_spline_future {
+            // Same polling setup as above, but we just set to none if finished
+            let waker = noop_waker();
+            let mut ctx = std::task::Context::from_waker(&waker);
+            let poll_result = export_spline_future.as_mut().poll(&mut ctx);
+            if let std::task::Poll::Ready(_) = poll_result {
+                self.export_spline_future = None;
             }
         }
     }
@@ -239,17 +252,6 @@ impl Gui {
                             });
                         },
                         GuiMenu::Spline => {
-                            let enabled = world.spline.selected_point < world.spline.data.points.len() as u32;
-                            // Default values to show in case we don't have a selected point and the UI is disabled
-                            let mut default_point = spline::SplineControlPoint {
-                                position: cgmath::Point3::new(0.0, 0.0, 0.0),
-                                pitch: cgmath::Deg(0.0),
-                                yaw: cgmath::Deg(0.0),
-                                tangent_magnitude: 0.0,
-                                color: Color32::WHITE,
-                            };
-                            let point = world.spline.data.points.get_mut(world.spline.selected_point as usize).unwrap_or(&mut default_point);
-
                             let mut rebuild_spline = false;
                             ui.label("Spline properties");
                             ui.horizontal(|ui| {
@@ -270,7 +272,36 @@ impl Gui {
                                     rebuild_spline = true;
                                 }
                             });
+                            ui.horizontal(|ui| {
+                                ui.label("Model Path:");
+                                ui.text_edit_singleline(&mut world.spline.data.name);
+                            });
+                            if ui.button("Export").clicked() {
+                                // Write out a zip file containing the uncompiled spline model
+                                let zip_bytes = export::construct_zip(&world.spline).unwrap();
+                                self.export_spline_future = Some(Box::pin(async {
+                                    let zip_bytes = zip_bytes; // Need this to move zip_bytes inside the closure
+                                    let save_file = AsyncFileDialog::new()
+                                        .add_filter("Export archive (.zip)", &["zip"])
+                                        .save_file()
+                                        .await;
+                                    if let Some(save_handle) = save_file {
+                                        let _ = save_handle.write(&zip_bytes).await;
+                                    };
+                                }));
+                            }
                             ui.separator();
+
+                            let enabled = world.spline.selected_point < world.spline.data.points.len() as u32;
+                            // Default values to show in case we don't have a selected point and the UI is disabled
+                            let mut default_point = spline::SplineControlPoint {
+                                position: cgmath::Point3::new(0.0, 0.0, 0.0),
+                                pitch: cgmath::Deg(0.0),
+                                yaw: cgmath::Deg(0.0),
+                                tangent_magnitude: 0.0,
+                                color: Color32::WHITE,
+                            };
+                            let point = world.spline.data.points.get_mut(world.spline.selected_point as usize).unwrap_or(&mut default_point);
 
                             if enabled {
                                 ui.label(format!("Point properties - Selected point: {}", world.spline.selected_point + 1));
