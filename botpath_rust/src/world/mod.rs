@@ -20,7 +20,10 @@ pub struct World {
     map_renderer: map::MapRenderer,
     pub map: map::Map,
     spline_renderer: spline::SplineRenderer,
-    pub spline: spline::Spline,
+    pub splines: Vec<spline::Spline>,
+
+    new_spline_requested: bool,
+    pub selected_spline: u32,
 }
 
 impl World {
@@ -78,7 +81,6 @@ impl World {
         let map_renderer = map::MapRenderer::new(render_state, &camera_bind_group_layout);
         let map = map::Map::empty(&render_state.device);
         let spline_renderer = spline::SplineRenderer::new(render_state, &camera_bind_group_layout);
-        let spline = spline::Spline::new(&render_state.device, &spline_renderer);
 
         Self {
             depth_texture,
@@ -90,7 +92,10 @@ impl World {
             map_renderer,
             map,
             spline_renderer,
-            spline,
+            splines: Vec::new(),
+
+            new_spline_requested: false,
+            selected_spline: 0,
         }
     }
 
@@ -106,8 +111,10 @@ impl World {
         }
 
         // Spline control events
-        if self.spline.process_events(event, &self.camera) {
-            return true;
+        if self.splines.len() > 0 {
+            if self.splines[self.selected_spline as usize].process_events(event, &self.camera) {
+                return true;
+            }
         }
 
         return false;
@@ -118,11 +125,19 @@ impl World {
     }
 
     pub fn update(&mut self, render_state: &RenderState, dt: Duration) {
+        if self.new_spline_requested {
+            self.splines.push(spline::Spline::new(&render_state.device, &self.spline_renderer));
+            self.selected_spline = self.splines.len() as u32 - 1;
+            self.new_spline_requested = false;
+        }
+
         self.camera_controller.update_camera(&mut self.camera, dt);
         self.camera_uniform.update_view_proj(&self.camera);
         render_state.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
 
-        self.spline.update(render_state, &self.spline_renderer);
+        for spline in self.splines.iter_mut() {
+            spline.update(render_state, &self.spline_renderer);
+        }
     }
 
     pub fn render(&self, _render_state: &RenderState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
@@ -154,15 +169,32 @@ impl World {
         });
 
         self.map_renderer.draw(&mut render_pass, &self.camera_bind_group, &self.map);
-        self.spline_renderer.draw(&mut render_pass, &self.camera_bind_group, &self.spline);
+        for spline in self.splines.iter() {
+            self.spline_renderer.draw(&mut render_pass, &self.camera_bind_group, spline);
+        }
     }
 
-    pub fn restore_state(&mut self, serialized_state: &str) {
-        self.spline.data = serde_json::from_str(serialized_state).unwrap();
-        self.spline.request_rebuild();
+    pub fn restore_state(&mut self, serialized_state: &str, render_state: &RenderState) {
+        let spline_data: Vec<spline::SplineData> = serde_json::from_str(serialized_state).unwrap();
+        self.splines = Vec::new();
+        for data in spline_data.into_iter() {
+            let mut spline = spline::Spline::new(&render_state.device, &self.spline_renderer);
+            spline.data = data;
+            spline.selected_point = spline.data.points.len() as u32;
+            spline.request_rebuild();
+            self.splines.push(spline);
+        }
     }
 
     pub fn save_state(&self) -> String {
-        serde_json::to_string(&self.spline.data).unwrap()
+        let mut spline_data = Vec::new();
+        for spline in self.splines.iter() {
+            spline_data.push(&spline.data);
+        }
+        serde_json::to_string(&spline_data).unwrap()
+    }
+
+    pub fn add_spline(&mut self) {
+        self.new_spline_requested = true;
     }
 }

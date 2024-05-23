@@ -8,37 +8,40 @@ use std::io::{Cursor, Write};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
-pub fn construct_zip(spline: &Spline) -> Result<Vec<u8>> {
+pub fn construct_zip(splines: &Vec<Spline>) -> Result<Vec<u8>> {
     // Construct the buffer we will write our Zip file to
     let mut zip_buffer = Vec::new();
     let mut zip = ZipWriter::new(Cursor::new(&mut zip_buffer));
-
-    // Construct the SMD file
     let options = SimpleFileOptions::default();
-    zip.start_file("spline.smd", options)?;
-    smd_from_spline(spline, &mut zip)?;
 
-    // Construct the QC file
-    let origin;
-    if spline.data.points.len() == 0 {
-        origin = Point3::new(0.0, 0.0, 0.0);
+    // Construct the model files for each spline
+    for (i, spline) in splines.iter().enumerate() {
+        // Construct the SMD file
+        zip.start_file(format!("spline-{i}.smd"), options)?;
+        smd_from_spline(spline, &mut zip)?;
+
+        // Construct the QC file
+        let origin;
+        if spline.data.points.len() == 0 {
+            origin = Point3::new(0.0, 0.0, 0.0);
+        }
+        else {
+            origin = spline.data.points[0].position;
+        }
+        zip.start_file(format!("spline-{i}.qc"), options)?;
+        // We negate the origin to offset it to the first vertex
+        zip.write_all(&formatdoc! {"
+            $staticprop
+            $modelname \"{}\"
+            $origin {} {} {}
+            $scale \"1.0\"
+            $body \"Body\" \"spline-{i}\"
+            $cdmaterials \"spline-gen\"
+            $sequence idle \"spline-{i}\"
+            $surfaceprop \"default\"
+            $mostlyopaque
+        ", spline.data.name, -origin.x, -origin.y, -origin.z}.into_bytes())?;
     }
-    else {
-        origin = spline.data.points[0].position;
-    }
-    zip.start_file("spline.qc", options)?;
-    // We negate the origin to offset it to the first vertex
-    zip.write_all(&formatdoc! {"
-        $staticprop
-        $modelname \"{}\"
-        $origin {} {} {}
-        $scale \"1.0\"
-        $body \"Body\" \"spline\"
-        $cdmaterials \"spline-gen\"
-        $sequence idle \"spline\"
-        $surfaceprop \"default\"
-        $mostlyopaque
-    ", spline.data.name, -origin.x, -origin.y, -origin.z}.into_bytes())?;
 
     // Construct the required VTF/VMT files
     zip.add_directory("materials/spline-gen", options)?;
