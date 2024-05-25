@@ -350,6 +350,20 @@ impl Spline {
             render_state.queue.write_buffer(&self.point_colors_buffer, 0, bytemuck::cast_slice(&color_vec));
         }
     }
+
+    pub fn add_before_selected(&mut self) {
+        let selected_point = &self.data.points[self.selected_point as usize];
+        let new_point = SplineControlPoint {
+            position: selected_point.position - selected_point.calculate_tangent(),
+            pitch: selected_point.pitch,
+            yaw: selected_point.yaw,
+            tangent_magnitude: selected_point.tangent_magnitude,
+            color: selected_point.color,
+        };
+        self.data.points.insert(self.selected_point as usize, new_point);
+
+        self.request_rebuild();
+    }
 }
 
 #[derive(Serialize, Deserialize)]

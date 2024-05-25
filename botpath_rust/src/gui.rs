@@ -332,7 +332,6 @@ impl Gui {
                                     tangent_magnitude: 0.0,
                                     color: Color32::WHITE,
                                 };
-                                let point = spline.data.points.get_mut(spline.selected_point as usize).unwrap_or(&mut default_point);
 
                                 if enabled {
                                     ui.label(format!("Point properties - Selected point: {}", spline.selected_point + 1));
@@ -341,6 +340,17 @@ impl Gui {
                                     ui.label("Point properties");
                                 }
                                 ui.add_enabled_ui(enabled, |ui| {
+                                    ui.horizontal(|ui| {
+                                        if ui.button("+").clicked() {
+                                            spline.add_before_selected();
+                                        }
+                                        if ui.button("-").clicked() {
+                                            spline.data.points.remove(spline.selected_point as usize);
+                                            rebuild_spline = true;
+                                        }
+                                    });
+
+                                    let point = spline.data.points.get_mut(spline.selected_point as usize).unwrap_or(&mut default_point);
                                     ui.horizontal(|ui| {
                                         ui.label("X:");
                                         if ui.add(DragValue::new(&mut point.position.x)).changed() {
