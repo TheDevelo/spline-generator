@@ -242,6 +242,7 @@ impl Gui {
                                     self.save_state_future = Some(Box::pin(async {
                                         let save_file = AsyncFileDialog::new()
                                             .add_filter("Spline state (.json)", &["json"])
+                                            .set_file_name("splines.json")
                                             .save_file()
                                             .await;
                                         if let Some(save_handle) = save_file {
@@ -286,6 +287,7 @@ impl Gui {
                                     let zip_bytes = zip_bytes; // Need this to move zip_bytes inside the closure
                                     let save_file = AsyncFileDialog::new()
                                         .add_filter("Export archive (.zip)", &["zip"])
+                                        .set_file_name("model_export.zip")
                                         .save_file()
                                         .await;
                                     if let Some(save_handle) = save_file {
