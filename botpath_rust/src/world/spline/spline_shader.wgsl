@@ -16,8 +16,10 @@ struct VertexOutput {
 
 @group(0) @binding(0)
 var<uniform> camera: CameraUniform;
+
+// We have a max of 1024 points, since the max uniform buffer size is (as low as) 16KB
 @group(1) @binding(0)
-var<storage> point_colors: array<vec4<f32>>;
+var<uniform> point_colors: array<vec4<f32>, 1024>;
 
 @vertex
 fn vs_main(

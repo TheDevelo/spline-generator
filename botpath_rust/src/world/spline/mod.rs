@@ -13,6 +13,10 @@ use winit::event::*;
 use winit::keyboard::{Key, NamedKey};
 use wgpu::util::DeviceExt;
 
+// Because WebGL has a limit of 16KB per uniform, and we store 16 bytes per control point color,
+// the max number of control points per spline we can have is 1024
+const MAX_POINTS_PER_SPLINE: usize = 1024;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SplineVertex {
@@ -59,7 +63,6 @@ pub struct Spline {
     index_buffer: wgpu::Buffer,
     index_count: u32,
     point_colors_buffer: wgpu::Buffer,
-    point_colors_buffer_size: usize,
     point_colors_bind_group: wgpu::BindGroup,
 }
 
@@ -80,8 +83,8 @@ impl Spline {
 
         let point_colors_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Point Colors Buffer"),
-            contents: bytemuck::cast_slice(&[0.0 as f32; 128]),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            contents: bytemuck::cast_slice(&[0.0 as f32; MAX_POINTS_PER_SPLINE * 4]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         let point_colors_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -114,7 +117,6 @@ impl Spline {
             index_buffer,
             index_count: 0,
             point_colors_buffer,
-            point_colors_buffer_size: 128,
             point_colors_bind_group,
         }
     }
@@ -188,7 +190,7 @@ impl Spline {
         }
     }
 
-    pub fn update(&mut self, render_state: &RenderState, renderer: &SplineRenderer) {
+    pub fn update(&mut self, render_state: &RenderState) {
         if self.reconstruct_mesh {
             self.vertices = Vec::new();
             self.indices = Vec::new();
@@ -302,7 +304,7 @@ impl Spline {
 
         // Write to the point color buffer
         // First, construct a slice of f32s representing each color at each control point
-        let mut color_vec = Vec::with_capacity(self.data.points.len() * 4);
+        let mut color_vec = vec![0.0; MAX_POINTS_PER_SPLINE * 4];
         for (i, point) in self.data.points.iter().enumerate() {
             let mut color_rgba;
             if i == self.selected_point as usize {
@@ -314,41 +316,14 @@ impl Spline {
                 color_rgba = Rgba::from(point.color);
             }
             let (r, g, b, a) = color_rgba.to_tuple();
-            color_vec.push(r);
-            color_vec.push(g);
-            color_vec.push(b);
-            color_vec.push(a);
+            color_vec[i * 4] = r;
+            color_vec[i * 4 + 1] = g;
+            color_vec[i * 4 + 2] = b;
+            color_vec[i * 4 + 3] = a;
         }
 
-        // Now copy our constructed slice to the GPU
-        if self.data.points.len() * 4 >= self.point_colors_buffer_size {
-            // Pad out color_vec to have twice the size of point_colors_buffer_size
-            self.point_colors_buffer_size *= 2;
-            while color_vec.len() < self.point_colors_buffer_size {
-                color_vec.push(0.0);
-            }
-
-            // Our point color buffer is too small, so create a new one that is double the size
-            self.point_colors_buffer = render_state.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Point Colors Buffer"),
-                contents: bytemuck::cast_slice(&color_vec),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-
-            self.point_colors_bind_group = render_state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &renderer.point_colors_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.point_colors_buffer.as_entire_binding(),
-                    }
-                ],
-                label: Some("point_colors_bind_group"),
-            });
-        }
-        else {
-            render_state.queue.write_buffer(&self.point_colors_buffer, 0, bytemuck::cast_slice(&color_vec));
-        }
+        // Write our colors to the GPU
+        render_state.queue.write_buffer(&self.point_colors_buffer, 0, bytemuck::cast_slice(&color_vec));
     }
 
     pub fn add_before_selected(&mut self) {
@@ -423,16 +398,14 @@ impl SplineRenderer {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage {
-                            read_only: true,
-                        },
+                        ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
                     count: None,
                 }
             ],
-            label: Some("selected_point_bind_group_layout"),
+            label: Some("point_colors_bind_group_layout"),
         });
 
         let render_pipeline_layout = render_state.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

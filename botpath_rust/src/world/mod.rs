@@ -136,7 +136,7 @@ impl World {
         render_state.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
 
         for spline in self.splines.iter_mut() {
-            spline.update(render_state, &self.spline_renderer);
+            spline.update(render_state);
         }
     }
 
