@@ -1,5 +1,5 @@
 [package]
-name = "spline-generator"
+name = "spline_generator"
 version = "1.1.1"
 edition = "2021"
 repository = "https://github.com/TheDevelo/spline-generator"

@@ -278,8 +278,8 @@ impl Spline {
                 let end_base_i = (subdiv_points.len() as u32 - 1) * self.data.sides;
                 for i in 1..(self.data.sides - 1) {
                     self.indices.push(end_base_i);
-                    self.indices.push(end_base_i + i);
                     self.indices.push(end_base_i + i + 1);
+                    self.indices.push(end_base_i + i);
                 }
             }
 
