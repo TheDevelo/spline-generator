@@ -1,145 +1,37 @@
-<html>
-  <head>
-    <link rel="stylesheet" href="https://cdn.simplecss.org/simple.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/mdbassit/Coloris@latest/dist/coloris.min.css"/>
-    <script src="botpath.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/mdbassit/Coloris@latest/dist/coloris.min.js"></script>
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Develo's Spline Generator</title>
     <style>
-      body {
-        grid-template-columns: 1fr min(90rem, 90%) 1fr;
-      }
-      :root {
-        --accent: deepskyblue;
-      }
+        body {
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        canvas {
+            background-color: black;
+            width: 100%;
+            height: 100%;
+        }
+        #wgpu-target {
+            width: 100vw;
+            height: 100vh;
+        }
     </style>
-    <title>Develo's Botpath Generator</title>
-  </head>
-  <body>
-    <header>
-      <h1>Develo's Botpath Model Generator</h1>
-    </header>
-    <main>
-      <p>
-        This tool lets you generate a .qc/.smd model for use in Source Engine games that follows a player's movement path.
-        To use this tool, select your movement data (on how to obtain it, see below), choose a name for your model, choose your desired parameters, and click generate.
-        You can then save the generated .zip file and extract to obtain the generated model.
-        Compile the .qc and .smd with Crowbar/studiomdl, and place the contents of the materials folder in the materials folder for the game you are mapping for.
-        You should then be able to use your generated model as a prop_static in Hammer.
-      </p>
-      <hr/>
-      <label for="file-selector">Player Movement Data (console.log): <input type="file" id="file-selector" name="file-selector"></label>
-      <label for="name">Botpath Model Path/Name: <input type="text" id="name" name="name" value="bp-gen/botpath-model"></label>
-      <label for="size">Botpath Radius (in units): <input type="number" id="radius" name="radius" value="4.0"></label>
-      <label for="size">Botpath Side Count (>= 2): <input type="number" id="sides" name="sides" value="6" min="2" step="1"></label>
-      <label for="color">Botpath Color: <input type="text" id="color" name="color" value="#ffffff" data-coloris></label>
-      <label for="gradient-enable">Enable color gradient: <input type="checkbox" id="gradient-enable" name="gradient-enable"></label>
-      <label for="gradient">Second gradient color: <input type="text" id="gradient" name="gradient" value="#000000" data-coloris></label>
-      <label for="split-enable">Split Botpath into multiple models: <input type="checkbox" id="split-enable" name="split-enable"></label>
-      <label for="prisms">Number of prisms to split per model: <input type="number" id="prisms" name="prisms" value="128" min="1" step="1"></label>
-      <input type="button" id="generate" value="Generate">
-      <hr/>
-      <h2>Generating the movement data</h2>
-      <p>
-        To utilize this tool, you must record the movement data from in-game. This process takes a few steps:
-        <ol>
-          <li>
-            Launch Momentum Mod/Counter Strike: Source/Counter Strike: Global Offensive/Team Fortress 2/etc with the launch argument "-condebug".
-            If you are playing on the playtest/key version of Momentum Mod, add "-mapping" as well.
-          </li>
-          <li>
-            Bind a key to "getpos" in the console via "bind KEY getpos".
-          </li>
-          <li>
-            Open the map you want to record movement for.
-            Get in position for where you want your botpath to start.
-            If you instead want to record a Momentum Mod replay, load the replay, pause, and go to the beginning.
-          </li>
-          <li>
-            Using external software such as AutoHotKey, official software from your keyboard's manufacturer, xdotool for linux, etc, repeatedly press the key you bound to "getpos".
-            The more frequently you press the key, the smoother the botpath model will be, but the model will also be larger in file size/use more polys.
-          </li>
-          <li>
-            Start playing the game. If you want to record a Momentum Mod replay, you can now unpause the replay.
-          </li>
-          <strong>
-            NOTE: If you mess up while recording, the only way to restart is to close the game, delete the console.log file, and relaunch.
-          </strong>
-          <li>
-            Once you are satisfied, stop the external software and close the game.
-            In your game installation's momentum/cstrike/etc folder, there should be a file called "console.log".
-            This is the file that contains the required movement data for this tool.
-            Move this file elsewhere, as the game may not overwrite the file but instead add onto it, resulting in an incorrect botpath model.
-          </li>
-        </ol>
-        If you do not already have external software to repeatedly press a key, here is a suitable AutoHotkey script.
-        Press F6 to toggle pressing "l" on and on.
-        You can adjust the resolution of the script by changing 50 to a different value.
-        A higher value means a longer delay between presses, and thus a lower resolution but smaller file size.
-        <pre>
-<code>#MaxThreadsPerHotkey 2
+</head>
 
-F6::
-{
-    Toggle:=!Toggle
-    While, Toggle
-    {
-        Send l
-        Sleep, 50
-    }
-}
-Return</code></pre>
-        Save the script to an .ahk file and run with AutoHotkey. When you're finished feel free to close AutoHotkey.
-      </p>
-    </main>
-    <script>
-      const generateButton = document.getElementById('generate');
-      generateButton.addEventListener('click', (event) => {
-        const [file] = document.getElementById("file-selector").files;
-        const name = document.getElementById("name").value;
-        const radius = document.getElementById("radius").value;
-        const sides = document.getElementById("sides").value;
-        const color = document.getElementById("color").value;
-        prisms = document.getElementById("prisms").value;
-        gradient = document.getElementById("gradient").value;
-        const reader = new FileReader();
-
-        if (!document.getElementById("split-enable").checked) {
-          prisms = Opal.nil;
-        }
-        if (!document.getElementById("gradient-enable").checked) {
-          gradient = Opal.nil;
-        }
-
-        reader.addEventListener("load", () => {
-          var files = Opal.Kernel.$generate_zip(reader.result, name, radius, color, gradient, sides, prisms);
-          var zip = new JSZip();
-          files[0].forEach((e,i) => {
-            zip.file("botpath_sec" + (i + 1).toString() + ".smd", e[0]);
-            zip.file("botpath_sec" + (i + 1).toString() + ".qc", e[1]);  
-          });
-          var mats = zip.folder("materials").folder("bp-gen");
-          mats.file("botpath.vtf", files[1], { base64: true });
-          files[2].forEach((e,i) => {
-            mats.file(e[1] + ".vmt", e[0])
-          });
-          zip.generateAsync({type:"blob"})
-          .then(function(content) {
-              saveAs(content, "botpath-model.zip");
-          });
-        }, false);
-
-        if (file) {
-          reader.readAsText(file);
-        }
-      });
-
-      Coloris({
-        theme: 'polaroid',
-        themeMode: 'auto',
-        alpha: false
-      });
+<body>
+  <div id="wgpu-target">
+    <script type="module">
+        import init from "./spline_generator.js";
+        init().then(() => {
+            console.log("WASM Loaded");
+        });
     </script>
-  </body>
+  </div>
+</body>
+
 </html>

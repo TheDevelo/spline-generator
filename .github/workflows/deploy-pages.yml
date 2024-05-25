@@ -22,18 +22,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: 3.0
-      - name: Install Opal
-        run: gem install opal
-      - name: Compile web.rb to botpath.js
-        run: opal -Ilib --compile web.rb > botpath.js
-      - name: Minify botpath.js
-        uses: docker://tdewolff/minify
-        with:
-          args: -o site/botpath.min.js botpath.js
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build WASM
+        run: wasm-pack build --target web
+      - name: Assemble site
+        run: mv pkg/* site/
       - name: Setup Pages
         uses: actions/configure-pages@v2
       - name: Upload artifact
