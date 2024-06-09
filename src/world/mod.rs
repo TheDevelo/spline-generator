@@ -5,6 +5,7 @@ pub mod map;
 use crate::texture;
 use crate::RenderState;
 
+use std::cell::{RefCell, Ref};
 use web_time::Duration;
 use winit::event::*;
 use wgpu::util::DeviceExt;
@@ -20,7 +21,7 @@ pub struct World {
     map_renderer: map::MapRenderer,
     pub map: map::Map,
     spline_renderer: spline::SplineRenderer,
-    pub splines: Vec<spline::Spline>,
+    pub splines: Vec<RefCell<spline::Spline>>,
 
     new_spline_requested: bool,
     pub selected_spline: u32,
@@ -112,7 +113,7 @@ impl World {
 
         // Spline control events
         if self.splines.len() > 0 {
-            if self.splines[self.selected_spline as usize].process_events(event, &self.camera) {
+            if self.splines[self.selected_spline as usize].borrow_mut().process_events(event, &self.camera) {
                 return true;
             }
         }
@@ -126,7 +127,7 @@ impl World {
 
     pub fn update(&mut self, render_state: &RenderState, dt: Duration) {
         if self.new_spline_requested {
-            self.splines.push(spline::Spline::new(&render_state.device, &self.spline_renderer));
+            self.splines.push(spline::Spline::new(&render_state.device, &self.spline_renderer).into());
             self.selected_spline = self.splines.len() as u32 - 1;
             self.new_spline_requested = false;
         }
@@ -135,12 +136,27 @@ impl World {
         self.camera_uniform.update_view_proj(&self.camera);
         render_state.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
 
-        for spline in self.splines.iter_mut() {
-            spline.update(render_state);
+        // Loop twice, first to update bundles and then second to update the rest
+        for i in 0..self.splines.len() {
+            let mut spline = self.splines[i].borrow_mut();
+            if !spline.data.bundle {
+                continue;
+            }
+            spline.update(&self.splines, render_state);
+        }
+        for i in 0..self.splines.len() {
+            let mut spline = self.splines[i].borrow_mut();
+            if spline.data.bundle {
+                continue;
+            }
+            spline.update(&self.splines, render_state);
         }
     }
 
     pub fn render(&self, _render_state: &RenderState, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+        // Need to borrow up here so that the variables get dropped in the right order
+        let borrowed_splines: Vec<Ref<spline::Spline>> = self.splines.iter().map(|s| s.borrow()).collect();
+
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("3D Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -169,8 +185,8 @@ impl World {
         });
 
         self.map_renderer.draw(&mut render_pass, &self.camera_bind_group, &self.map);
-        for spline in self.splines.iter() {
-            self.spline_renderer.draw(&mut render_pass, &self.camera_bind_group, spline);
+        for spline in borrowed_splines.iter() {
+            self.spline_renderer.draw(&mut render_pass, &self.camera_bind_group, &spline);
         }
     }
 
@@ -182,13 +198,14 @@ impl World {
             spline.data = data;
             spline.selected_point = spline.data.points.len() as u32;
             spline.request_rebuild();
-            self.splines.push(spline);
+            self.splines.push(spline.into());
         }
     }
 
     pub fn save_state(&self) -> String {
         let mut spline_data = Vec::new();
-        for spline in self.splines.iter() {
+        let borrowed_splines: Vec<Ref<spline::Spline>> = self.splines.iter().map(|s| s.borrow()).collect();
+        for spline in borrowed_splines.iter() {
             spline_data.push(&spline.data);
         }
         serde_json::to_string(&spline_data).unwrap()

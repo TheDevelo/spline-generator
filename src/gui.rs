@@ -2,7 +2,7 @@ use crate::RenderState;
 use crate::world::{map, spline, World};
 use crate::world::spline::export;
 
-use egui::{Color32, Context, DragValue};
+use egui::{Context, DragValue};
 use egui_winit::{EventResponse, State};
 use egui_wgpu::renderer::{Renderer, ScreenDescriptor};
 use noop_waker::noop_waker;
@@ -20,6 +20,9 @@ pub struct Gui {
     // gui state
     menu_selection: GuiMenu,
     snap_value: f32,
+    bundle_spline: u32,
+    bundle_point: u32,
+    bundle_slot: u32,
 
     vmf_future: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
     load_state_future: Option<Pin<Box<dyn Future<Output = Option<String>>>>>,
@@ -70,6 +73,9 @@ impl Gui {
 
             menu_selection: GuiMenu::Controls,
             snap_value: 64.0,
+            bundle_spline: 1,
+            bundle_point: 1,
+            bundle_slot: 1,
 
             vmf_future: None,
             load_state_future: None,
@@ -266,7 +272,7 @@ impl Gui {
 
                                 let selected_spline_text;
                                 if world.splines.len() > 0 {
-                                    selected_spline_text = format!("Spline {} - {}", world.selected_spline + 1, world.splines[world.selected_spline as usize].data.name);
+                                    selected_spline_text = format!("Spline {} - {}", world.selected_spline + 1, world.splines[world.selected_spline as usize].borrow().data.name);
                                 }
                                 else {
                                     selected_spline_text = "".to_string();
@@ -276,7 +282,7 @@ impl Gui {
                                     .show_ui(ui, |ui| {
                                         ui.set_width(ui.available_width());
                                         for (i, spline) in world.splines.iter().enumerate() {
-                                            ui.selectable_value(&mut world.selected_spline, i as u32, format!("Spline {} - {}", i + 1, spline.data.name));
+                                            ui.selectable_value(&mut world.selected_spline, i as u32, format!("Spline {} - {}", i + 1, spline.borrow().data.name));
                                         }
                                     });
                             });
@@ -298,7 +304,12 @@ impl Gui {
                             ui.separator();
 
                             if world.splines.len() > 0 {
-                                let spline = &mut world.splines[world.selected_spline as usize];
+                                // Need to declare up here because borrow checker :)
+                                let num_splines = world.splines.len();
+                                let num_points = world.splines[self.bundle_spline as usize - 1].borrow().data.points.len();
+                                let num_slots = world.splines[self.bundle_spline as usize - 1].borrow().data.sides;
+
+                                let mut spline = world.splines[world.selected_spline as usize].borrow_mut();
                                 let mut rebuild_spline = false;
                                 ui.label("Spline properties");
                                 ui.horizontal(|ui| {
@@ -320,6 +331,13 @@ impl Gui {
                                     }
                                 });
                                 ui.horizontal(|ui| {
+                                    ui.label("Bundle Spline:");
+                                    if ui.checkbox(&mut spline.data.bundle, "").changed() {
+                                        // Need to rebuild to build the bundle positions
+                                        rebuild_spline = true;
+                                    }
+                                });
+                                ui.horizontal(|ui| {
                                     ui.label("Model Path:");
                                     ui.text_edit_singleline(&mut spline.data.name);
                                 });
@@ -327,13 +345,7 @@ impl Gui {
 
                                 let enabled = spline.selected_point < spline.data.points.len() as u32;
                                 // Default values to show in case we don't have a selected point and the UI is disabled
-                                let mut default_point = spline::SplineControlPoint {
-                                    position: cgmath::Point3::new(0.0, 0.0, 0.0),
-                                    pitch: cgmath::Deg(0.0),
-                                    yaw: cgmath::Deg(0.0),
-                                    tangent_magnitude: 0.0,
-                                    color: Color32::WHITE,
-                                };
+                                let mut default_point = spline::SplineControlPoint::blank();
 
                                 if enabled {
                                     ui.label(format!("Point properties - Selected point: {}", spline.selected_point + 1));
@@ -342,60 +354,82 @@ impl Gui {
                                     ui.label("Point properties");
                                 }
                                 ui.add_enabled_ui(enabled, |ui| {
+                                    let selected_point = spline.selected_point as usize;
                                     ui.horizontal(|ui| {
                                         if ui.button("+").clicked() {
                                             spline.add_before_selected();
                                         }
                                         if ui.button("-").clicked() {
-                                            spline.data.points.remove(spline.selected_point as usize);
+                                            spline.data.points.remove(selected_point);
                                             rebuild_spline = true;
                                         }
                                     });
 
-                                    let point = spline.data.points.get_mut(spline.selected_point as usize).unwrap_or(&mut default_point);
-                                    ui.horizontal(|ui| {
-                                        ui.label("X:");
-                                        if ui.add(DragValue::new(&mut point.position.x)).changed() {
-                                            rebuild_spline = true;
+                                    let point = spline.data.points.get_mut(selected_point).unwrap_or(&mut default_point);
+                                    if point.bundle_ref.is_none() {
+                                        ui.horizontal(|ui| {
+                                            if ui.button("Bundle").clicked() && self.bundle_spline - 1 != world.selected_spline && world.splines[self.bundle_spline as usize - 1].borrow().data.bundle {
+                                                point.bundle_ref = Some((self.bundle_spline - 1, self.bundle_point - 1, self.bundle_slot - 1));
+                                            }
+                                            ui.label("to spline");
+                                            ui.add(DragValue::new(&mut self.bundle_spline).clamp_range(1..=num_splines));
+                                            ui.label("point");
+                                            ui.add(DragValue::new(&mut self.bundle_point).clamp_range(1..=num_points));
+                                            ui.label("slot");
+                                            ui.add(DragValue::new(&mut self.bundle_slot).clamp_range(1..=num_slots));
+                                        });
+                                    }
+                                    else {
+                                        if ui.button("Unbundle").clicked() {
+                                            point.bundle_ref = None;
                                         }
-                                        ui.label("Y:");
-                                        if ui.add(DragValue::new(&mut point.position.y)).changed() {
-                                            rebuild_spline = true;
-                                        }
-                                        ui.label("Z:");
-                                        if ui.add(DragValue::new(&mut point.position.z)).changed() {
-                                            rebuild_spline = true;
-                                        }
-                                    });
+                                    }
 
-                                    ui.horizontal(|ui| {
-                                        ui.label("Snap position to");
-                                        ui.add(DragValue::new(&mut self.snap_value));
-                                        ui.label("-");
-                                        if ui.button("Snap").clicked() {
-                                            point.position.x = (point.position.x / self.snap_value).round() * self.snap_value;
-                                            point.position.y = (point.position.y / self.snap_value).round() * self.snap_value;
-                                            point.position.z = (point.position.z / self.snap_value).round() * self.snap_value;
-                                            rebuild_spline = true;
-                                        }
-                                    });
+                                    ui.add_enabled_ui(point.bundle_ref.is_none(), |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label("X:");
+                                            if ui.add(DragValue::new(&mut point.position.x)).changed() {
+                                                rebuild_spline = true;
+                                            }
+                                            ui.label("Y:");
+                                            if ui.add(DragValue::new(&mut point.position.y)).changed() {
+                                                rebuild_spline = true;
+                                            }
+                                            ui.label("Z:");
+                                            if ui.add(DragValue::new(&mut point.position.z)).changed() {
+                                                rebuild_spline = true;
+                                            }
+                                        });
 
-                                    ui.horizontal(|ui| {
-                                        ui.label("Pitch:");
-                                        if ui.add(DragValue::new(&mut point.pitch.0)).changed() {
-                                            rebuild_spline = true;
-                                        }
-                                        ui.label("Yaw:");
-                                        if ui.add(DragValue::new(&mut point.yaw.0)).changed() {
-                                            rebuild_spline = true;
-                                        }
-                                    });
+                                        ui.horizontal(|ui| {
+                                            ui.label("Snap position to");
+                                            ui.add(DragValue::new(&mut self.snap_value));
+                                            ui.label("-");
+                                            if ui.button("Snap").clicked() {
+                                                point.position.x = (point.position.x / self.snap_value).round() * self.snap_value;
+                                                point.position.y = (point.position.y / self.snap_value).round() * self.snap_value;
+                                                point.position.z = (point.position.z / self.snap_value).round() * self.snap_value;
+                                                rebuild_spline = true;
+                                            }
+                                        });
 
-                                    ui.horizontal(|ui| {
-                                        ui.label("Tangent Magnitude:");
-                                        if ui.add(DragValue::new(&mut point.tangent_magnitude)).changed() {
-                                            rebuild_spline = true;
-                                        }
+                                        ui.horizontal(|ui| {
+                                            ui.label("Pitch:");
+                                            if ui.add(DragValue::new(&mut point.pitch.0)).changed() {
+                                                rebuild_spline = true;
+                                            }
+                                            ui.label("Yaw:");
+                                            if ui.add(DragValue::new(&mut point.yaw.0)).changed() {
+                                                rebuild_spline = true;
+                                            }
+                                        });
+
+                                        ui.horizontal(|ui| {
+                                            ui.label("Tangent Magnitude:");
+                                            if ui.add(DragValue::new(&mut point.tangent_magnitude)).changed() {
+                                                rebuild_spline = true;
+                                            }
+                                        });
                                     });
 
                                     ui.horizontal(|ui| {

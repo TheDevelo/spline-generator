@@ -4,11 +4,12 @@ use anyhow::*;
 use cgmath::Point3;
 use egui::{Color32, Rgba};
 use indoc::{formatdoc, indoc};
+use std::cell::{RefCell, Ref};
 use std::io::{Cursor, Write};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
-pub fn construct_zip(splines: &Vec<Spline>) -> Result<Vec<u8>> {
+pub fn construct_zip(splines: &[RefCell<Spline>]) -> Result<Vec<u8>> {
     // Construct the buffer we will write our Zip file to
     let mut zip_buffer = Vec::new();
     let mut zip = ZipWriter::new(Cursor::new(&mut zip_buffer));
@@ -16,9 +17,14 @@ pub fn construct_zip(splines: &Vec<Spline>) -> Result<Vec<u8>> {
 
     // Construct the model files for each spline
     for (i, spline) in splines.iter().enumerate() {
+        let spline = spline.borrow();
+        if spline.data.bundle {
+            continue;
+        }
+
         // Construct the SMD file
         zip.start_file(format!("spline-{i}.smd"), options)?;
-        smd_from_spline(spline, &mut zip)?;
+        smd_from_spline(&spline, &mut zip)?;
 
         // Construct the QC file
         let origin;
@@ -71,7 +77,7 @@ pub fn construct_zip(splines: &Vec<Spline>) -> Result<Vec<u8>> {
     return Ok(zip_buffer);
 }
 
-fn smd_from_spline(spline: &Spline, zip: &mut dyn Write) -> Result<()> {
+fn smd_from_spline(spline: &Ref<Spline>, zip: &mut dyn Write) -> Result<()> {
     zip.write_all(indoc! {b"
         version 1
         nodes

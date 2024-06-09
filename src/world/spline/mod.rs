@@ -9,6 +9,7 @@ use cgmath::prelude::*;
 use cgmath::{Deg, Point3, Vector3};
 use egui::{Color32, Rgba};
 use serde::{Serialize, Deserialize};
+use std::cell::{RefCell, Ref};
 use winit::event::*;
 use winit::keyboard::{Key, NamedKey};
 use wgpu::util::DeviceExt;
@@ -46,6 +47,13 @@ pub struct SplineData {
     pub sides: u32,
     pub subdivisions: u32,
     pub name: String,
+    #[serde(default = "bundle_default")]
+    pub bundle: bool,
+}
+
+// Default functions for SplineData to support older spline JSON versions
+const fn bundle_default() -> bool {
+    false
 }
 
 pub struct Spline {
@@ -106,6 +114,7 @@ impl Spline {
                 sides: 3,
                 subdivisions: 16,
                 name: "".to_string(),
+                bundle: false,
             },
             selected_point: 0,
 
@@ -147,6 +156,8 @@ impl Spline {
                             yaw: camera.yaw.into(),
                             tangent_magnitude: 512.0,
                             color: Color32::WHITE,
+                            bundle_ref: None,
+                            bundle_positions: Vec::new(),
                         };
 
                         if self.selected_point == self.data.points.len() as u32 {
@@ -190,7 +201,35 @@ impl Spline {
         }
     }
 
-    pub fn update(&mut self, render_state: &RenderState) {
+    pub fn update(&mut self, splines: &[RefCell<Spline>], render_state: &RenderState) {
+        // Update any bundled points
+        let mut rebuild = false;
+        for point in self.data.points.iter_mut() {
+            if let Some((spline_i, point_i, slot)) = point.bundle_ref {
+                // Point is bundled, so check if we need to update anything in our point
+                let bundle_point = &splines[spline_i as usize].borrow().data.points[point_i as usize];
+                if point.position != bundle_point.bundle_positions[slot as usize] {
+                    point.position = bundle_point.bundle_positions[slot as usize];
+                    rebuild = true;
+                }
+                if point.pitch != bundle_point.pitch {
+                    point.pitch = bundle_point.pitch;
+                    rebuild = true;
+                }
+                if point.yaw != bundle_point.yaw {
+                    point.yaw = bundle_point.yaw;
+                    rebuild = true;
+                }
+                if point.tangent_magnitude != bundle_point.tangent_magnitude {
+                    point.tangent_magnitude = bundle_point.tangent_magnitude;
+                    rebuild = true;
+                }
+            }
+        }
+        if rebuild {
+            self.request_rebuild();
+        }
+
         if self.reconstruct_mesh {
             self.vertices = Vec::new();
             self.indices = Vec::new();
@@ -239,6 +278,18 @@ impl Spline {
                 for i in 0..self.data.sides {
                     let angle = i as f32 / self.data.sides as f32 * std::f32::consts::TAU;
                     poly_positions.push(angle.sin_cos());
+                }
+
+                // Update our bundle offsets if we are a bundling spline
+                if self.data.bundle {
+                    let mut subdiv_i = 0;
+                    for point in self.data.points.iter_mut() {
+                        point.bundle_positions = Vec::new();
+                        for poly_pos in poly_positions.iter() {
+                            point.bundle_positions.push(point.position + (poly_pos.0 * subdiv_normals[subdiv_i] + poly_pos.1 * subdiv_binormals[subdiv_i]) * self.data.radius);
+                        }
+                        subdiv_i += self.data.subdivisions as usize;
+                    }
                 }
 
                 // Construct the vertices for our mesh
@@ -334,6 +385,8 @@ impl Spline {
             yaw: selected_point.yaw,
             tangent_magnitude: selected_point.tangent_magnitude,
             color: selected_point.color,
+            bundle_ref: None,
+            bundle_positions: Vec::new(),
         };
         self.data.points.insert(self.selected_point as usize, new_point);
 
@@ -348,6 +401,12 @@ pub struct SplineControlPoint {
     pub yaw: Deg<f32>,
     pub tangent_magnitude: f32,
     pub color: Color32,
+    #[serde(default)]
+    pub bundle_ref: Option<(u32, u32, u32)>,
+
+    // Bundle helper data
+    #[serde(skip)]
+    bundle_positions: Vec<Point3<f32>>,
 }
 
 impl SplineControlPoint {
@@ -379,12 +438,25 @@ impl SplineControlPoint {
         let t2 = t*t;
         ((6.0*t2 - 6.0*t) * (pos_s - pos_o) + (3.0*t2 - 4.0*t + 1.0) * tangent_s + (3.0*t2 - 2.0*t) * tangent_o).normalize()
     }
+
+    pub fn blank() -> Self {
+        Self{
+            position: cgmath::Point3::new(0.0, 0.0, 0.0),
+            pitch: cgmath::Deg(0.0),
+            yaw: cgmath::Deg(0.0),
+            tangent_magnitude: 0.0,
+            color: Color32::WHITE,
+            bundle_ref: None,
+            bundle_positions: Vec::new(),
+        }
+    }
 }
 
 // Struct that handles the rendering of spline instances. Separate from Spline so that we can
 // freely draw multiple Splines without maintaining separate copies of our rendering state
 pub struct SplineRenderer {
-    render_pipeline: wgpu::RenderPipeline,
+    solid_render_pipeline: wgpu::RenderPipeline,
+    wireframe_render_pipeline: wgpu::RenderPipeline,
     point_colors_bind_group_layout: wgpu::BindGroupLayout,
 }
 
@@ -417,8 +489,8 @@ impl SplineRenderer {
             push_constant_ranges: &[],
         });
 
-        let render_pipeline = render_state.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Spline Render Pipeline"),
+        let solid_render_pipeline = render_state.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Solid Spline Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -460,14 +532,65 @@ impl SplineRenderer {
             multiview: None,
         });
 
+        let wireframe_render_pipeline = render_state.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Wireframe Spline Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[
+                    SplineVertex::desc(),
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: render_state.config.format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                // A line list with a properly built mesh would be a more accurate wireframe, but
+                // with line strip I can use the existing triangle list mesh for a decent wireframe
+                topology: wgpu::PrimitiveTopology::LineStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: texture::Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
         SplineRenderer {
-            render_pipeline,
+            solid_render_pipeline,
+            wireframe_render_pipeline,
             point_colors_bind_group_layout,
         }
     }
 
-    pub fn draw<'s>(&'s self, render_pass: &mut wgpu::RenderPass<'s>, camera_bind_group: &'s wgpu::BindGroup, spline: &'s Spline) {
-        render_pass.set_pipeline(&self.render_pipeline);
+    pub fn draw<'s>(&'s self, render_pass: &mut wgpu::RenderPass<'s>, camera_bind_group: &'s wgpu::BindGroup, spline: &'s Ref<Spline>) {
+        if spline.data.bundle {
+            render_pass.set_pipeline(&self.wireframe_render_pipeline);
+        }
+        else {
+            render_pass.set_pipeline(&self.solid_render_pipeline);
+        }
 
         render_pass.set_bind_group(0, camera_bind_group, &[]);
         render_pass.set_bind_group(1, &spline.point_colors_bind_group, &[]);
