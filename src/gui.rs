@@ -422,6 +422,10 @@ impl Gui {
                                             if ui.add(DragValue::new(&mut point.yaw.0)).changed() {
                                                 rebuild_spline = true;
                                             }
+                                            ui.label("Roll:");
+                                            if ui.add(DragValue::new(&mut point.roll.0)).changed() {
+                                                rebuild_spline = true;
+                                            }
                                         });
 
                                         ui.horizontal(|ui| {

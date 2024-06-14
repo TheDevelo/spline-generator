@@ -6,7 +6,7 @@ use crate::Vertex;
 use crate::world::camera::Camera;
 
 use cgmath::prelude::*;
-use cgmath::{Deg, Point3, Vector3};
+use cgmath::{Deg, Rad, Point3, Vector3};
 use egui::{Color32, Rgba};
 use serde::{Serialize, Deserialize};
 use std::cell::{RefCell, Ref};
@@ -154,6 +154,7 @@ impl Spline {
                             position: camera.position.map(|c| c.round()),
                             pitch: camera.pitch.into(),
                             yaw: camera.yaw.into(),
+                            roll: Deg(0.0),
                             tangent_magnitude: 512.0,
                             color: Color32::WHITE,
                             bundle_ref: None,
@@ -161,8 +162,9 @@ impl Spline {
                         };
 
                         if self.selected_point == self.data.points.len() as u32 {
-                            // Set the tangent magnitude and color to be that of the previous point (if there is one)
+                            // Set the roll, tangent magnitude, and color to be that of the previous point (if there is one)
                             if self.selected_point != 0 {
+                                new_point.roll = self.data.points[self.selected_point as usize - 1].roll;
                                 new_point.tangent_magnitude = self.data.points[self.selected_point as usize - 1].tangent_magnitude;
                                 new_point.color = self.data.points[self.selected_point as usize - 1].color;
                             }
@@ -171,7 +173,8 @@ impl Spline {
                             self.data.points.push(new_point);
                         }
                         else {
-                            // Set the tangent magnitude and color to be the same as the point we are replacing
+                            // Set the roll, tangent magnitude, and color to be the same as the point we are replacing
+                            new_point.roll = self.data.points[self.selected_point as usize - 1].roll;
                             new_point.tangent_magnitude = self.data.points[self.selected_point as usize].tangent_magnitude;
                             new_point.color = self.data.points[self.selected_point as usize].color;
 
@@ -206,6 +209,13 @@ impl Spline {
         let mut rebuild = false;
         for point in self.data.points.iter_mut() {
             if let Some((spline_i, point_i, slot)) = point.bundle_ref {
+                // First, check if our bundle_ref is valid. If not, remove the bundle ref.
+                if spline_i >= splines.len() as u32 || point_i >= splines[spline_i as usize].borrow().data.points.len() as u32 || slot >= splines[spline_i as usize].borrow().data.sides {
+                    point.bundle_ref = None;
+                    rebuild = true;
+                    continue;
+                }
+
                 // Point is bundled, so check if we need to update anything in our point
                 let bundle_point = &splines[spline_i as usize].borrow().data.points[point_i as usize];
                 if point.position != bundle_point.bundle_positions[slot as usize] {
@@ -272,20 +282,16 @@ impl Spline {
                     subdiv_binormals.push(subdiv_tangents[i].cross(normal));
                 }
 
-                // Calculate the polygon positions for our spline mesh. These positions will lie on the
-                // normal plane, and thus can be turned into offsets with the normal and binormal.
-                let mut poly_positions = Vec::new();
-                for i in 0..self.data.sides {
-                    let angle = i as f32 / self.data.sides as f32 * std::f32::consts::TAU;
-                    poly_positions.push(angle.sin_cos());
-                }
-
                 // Update our bundle offsets if we are a bundling spline
                 if self.data.bundle {
                     let mut subdiv_i = 0;
                     for point in self.data.points.iter_mut() {
                         point.bundle_positions = Vec::new();
-                        for poly_pos in poly_positions.iter() {
+                        for s in 0..self.data.sides {
+                            // Calculate the position within the normal/binormal plane of our point
+                            // We use sin_cos to form a linear combination of the normal and binormal
+                            let angle = s as f32 / self.data.sides as f32 * std::f32::consts::TAU + Rad::<f32>::from(point.roll).0;
+                            let poly_pos = angle.sin_cos();
                             point.bundle_positions.push(point.position + (poly_pos.0 * subdiv_normals[subdiv_i] + poly_pos.1 * subdiv_binormals[subdiv_i]) * self.data.radius);
                         }
                         subdiv_i += self.data.subdivisions as usize;
@@ -294,11 +300,29 @@ impl Spline {
 
                 // Construct the vertices for our mesh
                 for i in 0..subdiv_points.len() {
-                    for poly_pos in poly_positions.iter() {
+                    for s in 0..self.data.sides {
+                        // Calculate our linearly interpolated roll value from the nearest control points
+                        let lower_i = i as u32 / self.data.subdivisions;
+                        let t_value = i as f32 * subdiv_t;
+                        let inbetween_t = t_value - lower_i as f32;
+                        let roll;
+                        if lower_i == self.data.points.len() as u32 - 1 {
+                            // On the last point of our chain, so we can't interpolate with the
+                            // next point over. Thankfully, we don't need to interpolate at all.
+                            roll = self.data.points[lower_i as usize].roll;
+                        }
+                        else {
+                            roll = self.data.points[lower_i as usize].roll * (1.0 - inbetween_t) + self.data.points[lower_i as usize + 1].roll * inbetween_t;
+                        }
+
+                        // Calculate the position within the normal/binormal plane of our point
+                        // We use sin_cos to form a linear combination of the normal and binormal
+                        let angle = s as f32 / self.data.sides as f32 * std::f32::consts::TAU + Rad::<f32>::from(roll).0;
+                        let poly_pos = angle.sin_cos();
                         let position = subdiv_points[i] + (poly_pos.0 * subdiv_normals[i] + poly_pos.1 * subdiv_binormals[i]) * self.data.radius;
                         self.vertices.push(SplineVertex {
                             position: position.into(),
-                            t_value: i as f32 * subdiv_t,
+                            t_value,
                         });
                     }
                 }
@@ -383,6 +407,7 @@ impl Spline {
             position: selected_point.position - selected_point.calculate_tangent(),
             pitch: selected_point.pitch,
             yaw: selected_point.yaw,
+            roll: selected_point.roll,
             tangent_magnitude: selected_point.tangent_magnitude,
             color: selected_point.color,
             bundle_ref: None,
@@ -399,6 +424,8 @@ pub struct SplineControlPoint {
     pub position: Point3<f32>,
     pub pitch: Deg<f32>,
     pub yaw: Deg<f32>,
+    #[serde(default = "roll_default")]
+    pub roll: Deg<f32>,
     pub tangent_magnitude: f32,
     pub color: Color32,
     #[serde(default)]
@@ -407,6 +434,11 @@ pub struct SplineControlPoint {
     // Bundle helper data
     #[serde(skip)]
     bundle_positions: Vec<Point3<f32>>,
+}
+
+// Default functions for SplineControlPoint to support older spline JSON versions
+const fn roll_default() -> Deg<f32> {
+   Deg(0.0)
 }
 
 impl SplineControlPoint {
@@ -442,8 +474,9 @@ impl SplineControlPoint {
     pub fn blank() -> Self {
         Self{
             position: cgmath::Point3::new(0.0, 0.0, 0.0),
-            pitch: cgmath::Deg(0.0),
-            yaw: cgmath::Deg(0.0),
+            pitch: Deg(0.0),
+            yaw: Deg(0.0),
+            roll: Deg(0.0),
             tangent_magnitude: 0.0,
             color: Color32::WHITE,
             bundle_ref: None,
