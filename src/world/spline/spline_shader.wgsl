@@ -6,7 +6,8 @@ struct CameraUniform {
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
-    @location(1) t_value: f32,
+    @location(1) normal: vec3<f32>,
+    @location(2) t_value: f32,
 };
 
 struct VertexOutput {

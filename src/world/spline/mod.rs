@@ -22,11 +22,12 @@ const MAX_POINTS_PER_SPLINE: usize = 1024;
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SplineVertex {
     position: [f32; 3],
+    normal: [f32; 3],
     t_value: f32,
 }
 
 impl SplineVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32];
+    const ATTRIBS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32];
 }
 
 impl crate::Vertex for SplineVertex {
@@ -63,8 +64,8 @@ pub struct Spline {
 
     // Representative mesh
     reconstruct_mesh: bool, // So that we only rebuild our mesh after we update the underlying points
-    pub vertices: Vec<SplineVertex>, // We keep a copy of the mesh on CPU for exporting
-    pub indices: Vec<u32>,
+    vertices: Vec<SplineVertex>, // We keep a copy of the mesh on CPU for exporting
+    indices: Vec<u32>,
 
     // Wgpu data
     vertex_buffer: wgpu::Buffer,
@@ -298,7 +299,7 @@ impl Spline {
                     }
                 }
 
-                // Construct the vertices for our mesh
+                // Construct the vertices and normals for our mesh
                 for i in 0..subdiv_points.len() {
                     for s in 0..self.data.sides {
                         // Calculate our linearly interpolated roll value from the nearest control points
@@ -319,9 +320,35 @@ impl Spline {
                         // We use sin_cos to form a linear combination of the normal and binormal
                         let angle = s as f32 / self.data.sides as f32 * std::f32::consts::TAU + Rad::<f32>::from(roll).0;
                         let poly_pos = angle.sin_cos();
-                        let position = subdiv_points[i] + (poly_pos.0 * subdiv_normals[i] + poly_pos.1 * subdiv_binormals[i]) * self.data.radius;
+                        let offset_dir = poly_pos.0 * subdiv_normals[i] + poly_pos.1 * subdiv_binormals[i];
+                        let position = subdiv_points[i] + offset_dir * self.data.radius;
+
+                        // Calculate the angle-weighted normal of our vertex
+                        let angle_weighted_normal;
+                        if i == 0 || i == subdiv_points.len() - 1 {
+                           // Special case: the first/last subdivision have endcaps, so we need to
+                           // include those in the angle-weighted normal
+                           let endcap_angle = std::f32::consts::PI - (std::f32::consts::TAU / self.data.sides as f32);
+                           let endcap_normal;
+                           if i == 0 {
+                              // Normal of starting endcap points opposite the tangent direction
+                              endcap_normal = subdiv_tangents[i];
+                           }
+                           else {
+                              // Normal of starting endcap points in the tangent direction
+                              endcap_normal = -subdiv_tangents[i];
+                           }
+
+                           angle_weighted_normal = (offset_dir * std::f32::consts::PI + endcap_angle * endcap_normal).normalize();
+                        }
+                        else {
+                           // Without endcaps, the angle-weighted normal is exactly the offset direction
+                           angle_weighted_normal = offset_dir;
+                        }
+
                         self.vertices.push(SplineVertex {
                             position: position.into(),
+                            normal: angle_weighted_normal.into(),
                             t_value,
                         });
                     }

@@ -97,6 +97,9 @@ fn smd_from_spline(spline: &Ref<Spline>, zip: &mut dyn Write) -> Result<()> {
         let [v0x, v0y, v0z] = v0.position;
         let [v1x, v1y, v1z] = v1.position;
         let [v2x, v2y, v2z] = v2.position;
+        let [n0x, n0y, n0z] = v0.normal;
+        let [n1x, n1y, n1z] = v1.normal;
+        let [n2x, n2y, n2z] = v2.normal;
 
         // Determine the color of the triangle
         // We use the color of the majority t-value
@@ -128,6 +131,7 @@ fn smd_from_spline(spline: &Ref<Spline>, zip: &mut dyn Write) -> Result<()> {
 
         // Write the triangle to the VMT
         // NOTE: X/Y is usually east/north, but is north/west in SMD
+        // Additionally, SMD has normals point inwards instead of outwards
         let vmt_name;
         if qa == 31 {
             vmt_name = "spline.vmt";
@@ -137,10 +141,13 @@ fn smd_from_spline(spline: &Ref<Spline>, zip: &mut dyn Write) -> Result<()> {
         }
         zip.write_all(&formatdoc! {"
             {vmt_name}
-            0 {} {} {} 0.0 0.0 0.0 {u} {v}
-            0 {} {} {} 0.0 0.0 0.0 {u} {v}
-            0 {} {} {} 0.0 0.0 0.0 {u} {v}
-        ", v0y, -v0x, v0z, v1y, -v1x, v1z, v2y, -v2x, v2z}.into_bytes())?;
+            0 {} {} {} {} {} {} {u} {v}
+            0 {} {} {} {} {} {} {u} {v}
+            0 {} {} {} {} {} {} {u} {v}
+        ",
+        v0y, -v0x, v0z, -n0y, n0x, -n0z,
+        v1y, -v1x, v1z, -n1y, n1x, -n1z,
+        v2y, -v2x, v2z, -n2y, n2x, -n2z}.into_bytes())?;
     }
 
     zip.write_all(b"end")?;
